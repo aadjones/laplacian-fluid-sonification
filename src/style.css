@@ -1,0 +1,92 @@
+:root {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  line-height: 1.5;
+  color: #e0e0e0;
+  background-color: #0a0a0a;
+}
+
+body {
+  margin: 0;
+  display: flex;
+  justify-content: center;
+  padding: 2rem 1rem;
+}
+
+#app {
+  max-width: 900px;
+  width: 100%;
+}
+
+#container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+}
+
+h1 {
+  font-size: 1.4rem;
+  font-weight: 300;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #888;
+  margin: 0;
+}
+
+#fluid {
+  border: 1px solid #222;
+  cursor: crosshair;
+  image-rendering: pixelated;
+}
+
+#controls {
+  width: 100%;
+  max-width: 512px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+#mode-display {
+  font-size: 0.9rem;
+  color: #aaa;
+}
+
+#instructions {
+  font-size: 0.75rem;
+  color: #555;
+  line-height: 1.8;
+}
+
+kbd {
+  background: #222;
+  border: 1px solid #333;
+  border-radius: 3px;
+  padding: 0.1em 0.4em;
+  font-family: inherit;
+  font-size: 0.85em;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+}
+
+th {
+  text-align: left;
+  color: #555;
+  font-weight: 400;
+  padding: 0.2em 0.5em;
+  border-bottom: 1px solid #222;
+}
+
+td {
+  padding: 0.15em 0.5em;
+  color: #777;
+  font-variant-numeric: tabular-nums;
+}
+
+tr:hover td {
+  color: #bbb;
+}
