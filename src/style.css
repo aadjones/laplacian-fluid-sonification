@@ -90,3 +90,73 @@ td {
 tr:hover td {
   color: #bbb;
 }
+
+/* --- Config panel --- */
+#main-area {
+  display: flex;
+  gap: 1.5rem;
+  align-items: flex-start;
+}
+
+#config-panel {
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.panel-heading {
+  font-size: 0.75rem;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  border-bottom: 1px solid #222;
+  padding-bottom: 0.3rem;
+}
+
+.config-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.config-row label {
+  font-size: 0.7rem;
+  color: #666;
+}
+
+.config-row input[type="range"] {
+  width: 100%;
+  accent-color: #666;
+  height: 4px;
+}
+
+.config-value {
+  font-size: 0.7rem;
+  color: #888;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+#status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+#fps-display {
+  font-size: 0.75rem;
+  color: #555;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 750px) {
+  #main-area {
+    flex-direction: column;
+    align-items: center;
+  }
+  #config-panel {
+    width: 100%;
+    max-width: 512px;
+  }
+}

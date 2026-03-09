@@ -1,41 +1,52 @@
 /**
- * Web Audio sonification of eigenmode coefficients.
+ * Subtractive sonification of eigenmode coefficients via resonant filter bank.
  *
- * Maps the w vector (eigenmode coefficients) to an oscillator bank.
- * Each eigenmode (k1,k2) has eigenvalue λ = k1² + k2², which maps
- * naturally to an audible frequency. The amplitude of each oscillator
- * is driven by |w[k]| / ||w||₁.
+ * Architecture: noise source → N parallel bandpass filters → gain nodes → master gain
+ *
+ * Each eigenmode (k1,k2) maps to a bandpass filter whose center frequency
+ * is derived from the eigenvalue. The fluid's w vector controls each filter's
+ * Q (resonance sharpness) and output gain. This is physically motivated:
+ * the eigenmodes are resonances of the 2D domain, and filtering noise through
+ * them is literally "what would this cavity sound like if excited."
+ *
+ * Frequency mapping (physical membrane overtone series):
+ *   f_k = fundamental * λ_k^(1/s)    (s=2 gives f ∝ √λ)
  *
  * Bidirectional:
- *   - Fluid→Sound: sim updates w, sonifier reads it to set oscillator gains
- *   - Sound→Fluid: external source sets oscillator gains, sonifier writes w
- *
- * Frequency mapping (from dissertation):
- *   f_k = fundamental * (λ_max / λ_k)^(1/s)
- * where s controls octave spread. Since λ IS spatial frequency²,
- * this mapping is physically natural—not arbitrary.
+ *   - Fluid→Sound: w drives filter Q and gain
+ *   - Sound→Fluid: frequenciesToCoefficients maps external frequencies to w
  */
 
 import type { FluidSim } from '../sim/fluid';
 
 export interface SonifierConfig {
-  /** Base/fundamental frequency in Hz (default 64) */
+  /** Base/fundamental frequency in Hz (default 110, A2) */
   fundamental: number;
-  /** Octave scaling exponent (default 1.75) */
+  /** Eigenvalue-to-frequency exponent: 2 = √λ (physical membrane), 1 = λ (default 2) */
   octaveScale: number;
   /** Master gain (default 0.3) */
   masterGain: number;
+  /** Base Q for bandpass filters (default 15) */
+  baseQ: number;
+  /** Max Q when a mode is fully active (default 80) */
+  maxQ: number;
 }
 
 const DEFAULT_SONIFIER_CONFIG: SonifierConfig = {
-  fundamental: 64,
-  octaveScale: 1.75,
+  fundamental: 110,
+  octaveScale: 2,
   masterGain: 0.3,
+  baseQ: 15,
+  maxQ: 80,
 };
+
+/** Duration of the noise buffer in seconds */
+const NOISE_DURATION = 2;
 
 export class Sonifier {
   private ctx: AudioContext | null = null;
-  private oscillators: OscillatorNode[] = [];
+  private noiseSource: AudioBufferSourceNode | null = null;
+  private filters: BiquadFilterNode[] = [];
   private gains: GainNode[] = [];
   private masterGainNode: GainNode | null = null;
   private config: SonifierConfig;
@@ -47,7 +58,7 @@ export class Sonifier {
   }
 
   /**
-   * Initialize the audio context and create oscillator bank.
+   * Initialize the audio context and create the resonant filter bank.
    * Must be called from a user gesture (click/keypress) due to autoplay policy.
    */
   init(sim: FluidSim): void {
@@ -59,59 +70,81 @@ export class Sonifier {
     this.masterGainNode.connect(this.ctx.destination);
 
     // Compute frequencies for each mode
+    // Physical mapping: f_k = fundamental * λ_k^(1/octaveScale)
+    // For octaveScale=2 this gives f ∝ √λ, the natural overtone series
+    // of a rectangular membrane where λ = k₁² + k₂².
     const rank = sim.config.rank;
-    const eigenvalues = [];
-    let maxLambda = 0;
+    const { fundamental, octaveScale } = this.config;
+    this.frequencies = [];
     for (let k = 0; k < rank; k++) {
       const lam = sim.eigenvalue(k);
-      eigenvalues.push(lam);
-      maxLambda = Math.max(maxLambda, lam);
+      this.frequencies.push(fundamental * Math.pow(lam, 1 / octaveScale));
     }
 
-    const { fundamental, octaveScale } = this.config;
-    this.frequencies = eigenvalues.map(lam =>
-      fundamental * Math.pow(maxLambda / lam, 1 / octaveScale)
-    );
+    // Create white noise buffer
+    const sampleRate = this.ctx.sampleRate;
+    const bufferSize = sampleRate * NOISE_DURATION;
+    const noiseBuffer = this.ctx.createBuffer(1, bufferSize, sampleRate);
+    const data = noiseBuffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = Math.random() * 2 - 1;
+    }
 
-    // Create oscillator bank
+    // Create looping noise source
+    this.noiseSource = this.ctx.createBufferSource();
+    this.noiseSource.buffer = noiseBuffer;
+    this.noiseSource.loop = true;
+
+    // Create resonant filter bank: noise → bandpass[k] → gain[k] → master
     for (let k = 0; k < rank; k++) {
-      const osc = this.ctx.createOscillator();
-      osc.type = 'sine';
-      osc.frequency.value = this.frequencies[k];
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.value = this.frequencies[k];
+      filter.Q.value = this.config.baseQ;
 
       const gain = this.ctx.createGain();
       gain.gain.value = 0;
 
-      osc.connect(gain);
+      this.noiseSource.connect(filter);
+      filter.connect(gain);
       gain.connect(this.masterGainNode);
-      osc.start();
 
-      this.oscillators.push(osc);
+      this.filters.push(filter);
       this.gains.push(gain);
     }
 
+    this.noiseSource.start();
     this.running = true;
   }
 
   /**
-   * Update oscillator amplitudes from current sim state.
-   * Fluid→Sound direction: reads w, sets gains.
+   * Update filter bank from current sim state.
+   * Fluid→Sound direction: w controls filter Q (resonance) and output gain.
    */
   updateFromSim(sim: FluidSim): void {
-    if (!this.running) return;
+    if (!this.running || !this.ctx) return;
 
     const w = sim.w;
     const rank = sim.config.rank;
 
-    // L1 norm for normalization
-    let l1 = 0;
-    for (let k = 0; k < rank; k++) l1 += Math.abs(w[k]);
-    if (l1 < 1e-15) l1 = 1;
+    // Find max |w| for normalization
+    let maxW = 0;
+    for (let k = 0; k < rank; k++) maxW = Math.max(maxW, Math.abs(w[k]));
+    if (maxW < 1e-15) maxW = 1;
 
-    const now = this.ctx!.currentTime;
+    const now = this.ctx.currentTime;
+    const { baseQ, maxQ } = this.config;
+
     for (let k = 0; k < rank; k++) {
-      const amplitude = Math.abs(w[k]) / l1;
-      this.gains[k].gain.setTargetAtTime(amplitude, now, 0.02);
+      const activity = Math.abs(w[k]) / maxW; // 0 to 1
+
+      // Q: inactive modes are broad and quiet, active modes ring sharply
+      const q = baseQ + activity * (maxQ - baseQ);
+      this.filters[k].Q.setTargetAtTime(q, now, 0.03);
+
+      // Gain: squared activity for more dynamic contrast
+      const amplitude = activity * activity;
+      this.gains[k].gain.setTargetAtTime(amplitude, now, 0.03);
     }
   }
 
@@ -127,7 +160,6 @@ export class Sonifier {
     const w = new Float64Array(rank);
 
     for (const { freq, amp } of freqAmps) {
-      // Find nearest mode by frequency
       let bestK = 0;
       let bestDist = Infinity;
       for (let k = 0; k < this.frequencies.length; k++) {
