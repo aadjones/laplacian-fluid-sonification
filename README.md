@@ -2,14 +2,14 @@
 
 Real-time 2D fluid simulation with bidirectional eigenmode↔frequency sonification, running in the browser.
 
-<img width="512" alt="vorticity visualization" src="screenshot-1.png">
+<img width="480" alt="vorticity visualization" src="screenshot-1.png">
 
 ## Concept
 
 Laplacian eigenfunctions form a natural basis for incompressible fluid flow on a bounded domain. Each eigenmode (k₁,k₂) has a spatial frequency λ = k₁² + k₂² that maps directly to an audible frequency—the correspondence is physically natural, not arbitrary.
 
 The system is **bidirectional**:
-- **Fluid→Sound**: The simulation evolves eigenmode coefficients `w`, which drive an oscillator bank
+- **Fluid→Sound**: The simulation evolves eigenmode coefficients `w`, which drive a resonant filter bank
 - **Sound→Fluid**: Composed frequencies set `w` directly, visualizing the corresponding flow pattern
 
 The `w` vector is the universal state. Simulation, visualization, and sonification all read/write it.
@@ -25,11 +25,17 @@ Based on De Witt et al., "Fluid Simulation Using Laplacian Eigenfunctions" and t
 4. Viscous diffusion: `w[k] *= exp(λ_k · dt · ν)`
 5. Reconstruct velocity: `v = U · w`
 
-**Frequency mapping** (from dissertation):
+**Frequency mapping** (physical membrane overtone series):
 ```
-f_k = fundamental · (λ_max / λ_k)^(1/s)
+f_k = fundamental · λ_k^(1/s)    (s=2 gives f ∝ √λ)
 ```
-where `s` controls octave spread. Amplitudes are L1-normalized: `a_k = |w_k| / ||w||₁`.
+Low spatial modes → low pitch, high spatial modes → high pitch, matching how a rectangular membrane vibrates.
+
+**Sonification** (subtractive synthesis):
+```
+white noise → bandpass[k] (center=f_k, Q∝|w[k]|) → gain[k] (∝w[k]²) → master → speakers
+```
+Each eigenmode is a resonance of the 2D domain. Filtering noise through them is literally "what would this cavity sound like if excited."
 
 ## Quick Start
 
@@ -37,19 +43,30 @@ where `s` controls octave spread. Amplitudes are L1-normalized: `a_k = |w_k| / |
 npm install
 npm run dev       # Open http://localhost:5173
 npm test          # 25 tests
-npm run build     # Production build (~9KB JS)
+npm run build     # Production build
 ```
 
 ## Controls
 
-| Key | Action |
+| Input | Action |
 |---|---|
-| Click canvas | Inject vorticity (also starts audio on first click) |
+| Drag canvas | Inject vorticity (also starts audio on first click) |
 | Space | Pause / unpause |
 | S | Toggle sound |
 | M | Switch Simulation / Compose mode |
 | R | Reset |
 | 1-9 (compose mode) | Directly activate individual eigenmodes |
+
+All simulation parameters are adjustable via the config panel sliders:
+
+| Parameter | Default | Description |
+|---|---|---|
+| Modes (rank) | 32 | Number of eigenmodes in the basis |
+| Grid | 128 | Spatial grid resolution |
+| Viscosity | 0.005 | Damping coefficient (higher modes decay faster) |
+| Steps/frame | 50 | Simulation substeps per render frame (speed control) |
+| Click force | 5000 | Impulse magnitude when dragging |
+| Timestep | 0.0001 | Euler integration step size |
 
 ## Architecture
 
@@ -63,32 +80,22 @@ src/
   viz/
     renderer.ts    Canvas vorticity colormap (red=CCW, blue=CW)
   audio/
-    sonifier.ts    Web Audio oscillator bank, bidirectional freq↔mode mapping
-  main.ts          App shell, interaction, main loop
+    sonifier.ts    Resonant filter bank, bidirectional freq↔mode mapping
+  main.ts          App shell, config panel, interaction, main loop
 ```
 
 ### Key design decisions
 
+- **Subtractive synthesis**: Resonant bandpass filters on white noise instead of sine oscillators. Each filter's Q and gain are driven by |w[k]|, producing a sound that responds dynamically to the flow—active modes ring sharply, inactive modes fade to silence.
 - **Analytic structure coefficients**: Uses closed-form trig product-to-sum identities instead of numerical integration. The tensor is sparse due to selection rules.
 - **Column-major flat arrays**: Velocity basis U and structure tensor C stored as `Float64Array` for cache-friendly access in the inner loop.
 - **Energy correction**: Rescales w after advection to prevent numerical energy drift (same as C++ reference).
-- **No WebGL (yet)**: Canvas 2D is sufficient at 64×64. WebGL particle advection would be a natural next step for visual richness.
+- **Live config panel**: All parameters adjustable in real-time. "Cold" params (rank, grid, dt) rebuild the sim; "hot" params (viscosity, steps/frame, force) apply instantly.
 
-## Configuration
+## C++ Reference
 
-Edit constants at the top of `main.ts`:
-
-| Constant | Default | Description |
-|---|---|---|
-| `RANK` | 16 | Number of eigenmodes |
-| `GRID` | 64 | Simulation grid resolution |
-| `SIM_STEPS_PER_FRAME` | 50 | Substeps per render frame |
-| `DT` | 0.0001 | Timestep |
-
-Sonifier config in the `Sonifier` constructor:
-
-| Parameter | Default | Description |
-|---|---|---|
-| `fundamental` | 64 Hz | Base frequency |
-| `octaveScale` | 1.75 | Octave spread exponent |
-| `masterGain` | 0.3 | Master volume |
+The simulation math is ported from `laplacianEigen2D.cpp` in the UCSB LaplacianEigenfunctions codebase. Key correspondences:
+- `buildIJPairs` → `buildIjPairs`
+- `buildVelocityBasis` + `eigenfunction()` → `buildVelocityBasis`
+- `buildC` + `structureCoefficientAnalytic` → `buildStructureTensor` + `structureCoefficientAnalytic`
+- `stepEigenfunctions` → `FluidSim.step()`
