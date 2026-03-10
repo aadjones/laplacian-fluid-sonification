@@ -7,6 +7,7 @@
  */
 
 import { FluidSim } from '../sim/fluid';
+import type { ParticleSystem } from '../sim/particles';
 
 export class FluidRenderer {
   private canvas: HTMLCanvasElement;
@@ -80,5 +81,34 @@ export class FluidRenderer {
     }
 
     this.ctx.putImageData(this.imageData, 0, 0);
+  }
+
+  /**
+   * Render particles as small dots over the existing canvas content.
+   * Call after render() to overlay particles on vorticity.
+   */
+  renderParticles(particles: ParticleSystem, xRes: number, yRes: number): void {
+    const cw = this.canvas.width;
+    const ch = this.canvas.height;
+    const scaleX = cw / (xRes - 1);
+    const scaleY = ch / (yRes - 1);
+    const ctx = this.ctx;
+
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+
+    for (let i = 0; i < particles.count; i++) {
+      const px = particles.positions[i * 2] * scaleX;
+      const py = particles.positions[i * 2 + 1] * scaleY;
+
+      // Fade in over first 10 frames after spawn
+      const age = particles.ages[i];
+      if (age < 10) {
+        ctx.globalAlpha = age / 10 * 0.7;
+        ctx.fillRect(px - 0.5, py - 0.5, 1.5, 1.5);
+        ctx.globalAlpha = 1;
+      } else {
+        ctx.fillRect(px - 0.5, py - 0.5, 1.5, 1.5);
+      }
+    }
   }
 }

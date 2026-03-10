@@ -2,6 +2,7 @@ import './style.css';
 import { FluidSim } from './sim/fluid';
 import { FluidRenderer } from './viz/renderer';
 import { Sonifier } from './audio/sonifier';
+import { ParticleSystem } from './sim/particles';
 
 // --- Configuration (editable via panel) ---
 const config = {
@@ -12,6 +13,8 @@ const config = {
   dt: 0.0001,
   viscosity: 0.005,
   force: 5000,
+  particleCount: 8000,
+  forceStrength: 50,
 };
 
 // --- Mutable state ---
@@ -19,8 +22,11 @@ type Mode = 'sim' | 'compose';
 let mode: Mode = 'sim';
 let audioStarted = false;
 let paused = false;
+let forcing = true; // continuous forcing on by default
 let sim = new FluidSim({ rank: config.rank, xRes: config.grid, yRes: config.grid, dt: config.dt, viscosity: config.viscosity });
 let sonifier = new Sonifier({ fundamental: 110, octaveScale: 2, masterGain: 0.3 });
+let particles = new ParticleSystem(config.particleCount, config.grid, config.grid);
+let forceTime = 0; // accumulated time for forcing oscillation
 
 // Inject initial impulse
 sim.injectImpulse(config.grid / 2, config.grid / 2, 0, 1000);
@@ -83,7 +89,7 @@ function createApp(): {
 
   const instructions = document.createElement('div');
   instructions.id = 'instructions';
-  instructions.textContent = 'Drag canvas to inject vorticity · Space pause · S toggle sound · A cycle audio strategy · M switch sim/compose · R reset';
+  instructions.textContent = 'Drag to inject vorticity · Space pause · S sound · A audio strategy · F forcing · M mode · R reset';
   controls.appendChild(instructions);
 
   const modeTable = document.createElement('div');
@@ -182,6 +188,8 @@ function rebuildSim(): void {
   }
 
   sim.reconstruct();
+  particles = new ParticleSystem(config.particleCount, config.grid, config.grid);
+  forceTime = 0;
 
   // Rebuild sonifier if audio was started
   if (audioStarted) {
@@ -295,10 +303,15 @@ document.addEventListener('keydown', (e) => {
   } else if (e.key === 'a' || e.key === 'A') {
     ensureAudio();
     sonifier.nextStrategy();
+  } else if (e.key === 'f' || e.key === 'F') {
+    forcing = !forcing;
+    forceTime = 0;
   } else if (e.key === 'r' || e.key === 'R') {
     sim.w.fill(0);
     sim.injectImpulse(config.grid / 2, config.grid / 2, 0, 1000);
     sim.reconstruct();
+    particles.seed(config.grid, config.grid);
+    forceTime = 0;
   } else if (e.key >= '1' && e.key <= '9' && mode === 'compose') {
     const k = parseInt(e.key) - 1;
     if (k < config.rank) {
@@ -316,11 +329,21 @@ let lastFpsTime = performance.now();
 function frame(): void {
   if (!paused && mode === 'sim') {
     for (let i = 0; i < config.stepsPerFrame; i++) {
+      // Continuous forcing: oscillating jet from left side
+      if (forcing) {
+        forceTime += config.dt;
+        const gy = config.grid / 2 + Math.sin(forceTime * 3) * config.grid * 0.25;
+        sim.injectImpulse(2, gy, config.forceStrength, 0);
+      }
       sim.step();
     }
+
+    // Advect particles once per frame using the total elapsed time
+    particles.advect(sim.velocity, config.grid, config.grid, config.dt * config.stepsPerFrame, 1);
   }
 
   renderer.render(sim);
+  renderer.renderParticles(particles, config.grid, config.grid);
   updateModeTable();
 
   if (audioStarted) {
