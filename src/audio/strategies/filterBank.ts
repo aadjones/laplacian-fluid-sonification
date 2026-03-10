@@ -12,8 +12,8 @@
 import type { SonificationStrategy } from '../strategy';
 
 const NOISE_DURATION = 2;
-const BASE_Q = 15;
-const MAX_Q = 80;
+const BASE_Q = 200;
+const MAX_Q = 2000;
 
 export class FilterBankStrategy implements SonificationStrategy {
   readonly name = 'Filter Bank';
@@ -70,7 +70,8 @@ export class FilterBankStrategy implements SonificationStrategy {
       const activity = Math.abs(w[k]) / maxW;
       const q = BASE_Q + activity * (MAX_Q - BASE_Q);
       this.filters[k].Q.setTargetAtTime(q, now, 0.03);
-      const amplitude = activity * activity;
+      // Cube for sharp gating: quiet modes stay silent, active modes sing
+      const amplitude = activity * activity * activity * 4;
       this.gains[k].gain.setTargetAtTime(amplitude, now, 0.03);
     }
   }

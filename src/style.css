@@ -150,6 +150,37 @@ tr:hover td {
   font-variant-numeric: tabular-nums;
 }
 
+/* Fullscreen: canvas fills viewport, hide chrome */
+:fullscreen body {
+  padding: 0;
+  background: black;
+}
+
+:fullscreen #app {
+  max-width: none;
+}
+
+:fullscreen #container {
+  height: 100dvh;
+  justify-content: center;
+}
+
+:fullscreen h1,
+:fullscreen #config-panel,
+:fullscreen #controls {
+  display: none;
+}
+
+:fullscreen #main-area {
+  gap: 0;
+}
+
+:fullscreen #fluid {
+  border: none;
+  width: 100vmin;
+  height: 100vmin;
+}
+
 @media (max-width: 750px) {
   #main-area {
     flex-direction: column;

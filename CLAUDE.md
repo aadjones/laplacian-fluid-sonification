@@ -24,8 +24,13 @@ npm run test:watch    # Watch mode tests
 
 - `src/sim/basis.ts` — Eigenfunction basis construction, ij pair ordering, analytic structure tensor C
 - `src/sim/fluid.ts` — `FluidSim` class: simulation step loop, velocity reconstruction, impulse injection, `setCoefficients` (sound→fluid)
-- `src/viz/renderer.ts` — Canvas 2D vorticity colormap renderer
-- `src/audio/sonifier.ts` — Web Audio oscillator bank, fluid→sound (`updateFromSim`) and sound→fluid (`frequenciesToCoefficients`)
+- `src/sim/dye.ts` — Passive scalar (RGB dye) transport via semi-Lagrangian advection
+- `src/viz/renderer.ts` — Canvas 2D renderer: dye primary layer + vorticity underlay + particle overlay
+- `src/audio/sonifier.ts` — Web Audio strategy manager, frequency mapping, fluid↔sound bridge
+- `src/audio/strategy.ts` — `SonificationStrategy` interface
+- `src/audio/strategies/filterBank.ts` — Resonant filter bank: noise→high-Q bandpasses (Q 200–2000)
+- `src/audio/strategies/modalPercussion.ts` — Event-driven pings on mode energy spikes
+- `src/audio/strategies/harmonicSeries.ts` — Mode k → harmonic (k+1), w = spectral amplitudes
 - `src/main.ts` — App shell, DOM setup, interaction handlers, main loop
 
 ### Key Concepts
@@ -34,7 +39,9 @@ npm run test:watch    # Watch mode tests
 
 **Structure tensor C**: Precomputed rank³ tensor encoding nonlinear mode interactions. Uses analytic coefficients from trig product-to-sum identities (`structureCoefficientAnalytic`). Sparse due to selection rules.
 
-**Frequency mapping**: `f_k = fundamental * (λ_max / λ_k)^(1/s)` where λ_k = k₁² + k₂² is the eigenvalue. This is the invariant that makes the system bidirectional.
+**Frequency mapping**: Log-log mapping from eigenvalue range [λ_min, λ_max] to frequency range [freqLow, freqHigh] (default 55–4000 Hz, ~6 octaves). Perceptually uniform spacing across the keyboard. Configurable via `SonifierConfig.freqLow`/`freqHigh`.
+
+**Mode-selective forcing**: Number keys 1–9 toggle direct w[k] coefficient driving (Chladni-inspired). Each forced mode is pumped sinusoidally at its natural frequency. Dye is injected at mode antinodes for visual feedback.
 
 ### Data Layout
 

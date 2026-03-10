@@ -3,30 +3,32 @@ import { FluidSim } from './sim/fluid';
 import { FluidRenderer } from './viz/renderer';
 import { Sonifier } from './audio/sonifier';
 import { ParticleSystem } from './sim/particles';
+import { DyeField } from './sim/dye';
 
 // --- Configuration (editable via panel) ---
 const config = {
   rank: 32,
   grid: 128,
   canvasSize: 512,
-  stepsPerFrame: 50,
+  stepsPerFrame: 2,
   dt: 0.0001,
-  viscosity: 0.005,
-  force: 5000,
+  viscosity: 0.5,
+  force: 300,
   particleCount: 8000,
   forceStrength: 50,
 };
 
 // --- Mutable state ---
-type Mode = 'sim' | 'compose';
-let mode: Mode = 'sim';
 let audioStarted = false;
 let paused = false;
-let forcing = true; // continuous forcing on by default
 let sim = new FluidSim({ rank: config.rank, xRes: config.grid, yRes: config.grid, dt: config.dt, viscosity: config.viscosity });
-let sonifier = new Sonifier({ fundamental: 110, octaveScale: 2, masterGain: 0.3 });
+let sonifier = new Sonifier({ freqLow: 55, freqHigh: 4000, masterGain: 0.3 });
 let particles = new ParticleSystem(config.particleCount, config.grid, config.grid);
-let forceTime = 0; // accumulated time for forcing oscillation
+let dye = new DyeField(config.grid, config.grid);
+let forceTime = 0;
+
+// Mode-selective forcing: which modes are being driven (toggle with number keys)
+const forcedModes = new Set<number>([1]); // start with mode 1 (the (2,1) mode)
 
 // Inject initial impulse
 sim.injectImpulse(config.grid / 2, config.grid / 2, 0, 1000);
@@ -73,7 +75,7 @@ function createApp(): {
 
   const modeDisplay = document.createElement('div');
   modeDisplay.id = 'mode-display';
-  modeDisplay.textContent = 'Mode: Simulation';
+  modeDisplay.textContent = 'Modes: 1';
   statusRow.appendChild(modeDisplay);
 
   const strategyDisplay = document.createElement('div');
@@ -89,7 +91,7 @@ function createApp(): {
 
   const instructions = document.createElement('div');
   instructions.id = 'instructions';
-  instructions.textContent = 'Drag to inject vorticity · Space pause · S sound · A audio strategy · F forcing · M mode · R reset';
+  instructions.textContent = 'Drag to inject vorticity · 1-9 toggle modes · 0 clear modes · Space pause · S sound · A audio strategy · R reset · Enter fullscreen';
   controls.appendChild(instructions);
 
   const modeTable = document.createElement('div');
@@ -119,10 +121,9 @@ interface SliderDef {
 const sliders: SliderDef[] = [
   { key: 'rank', label: 'Modes (rank)', min: 4, max: 64, step: 4, cold: true },
   { key: 'grid', label: 'Grid', min: 32, max: 256, step: 32, cold: true },
-  { key: 'viscosity', label: 'Viscosity', min: 0, max: 0.05, step: 0.001, format: v => v.toFixed(3) },
-  { key: 'stepsPerFrame', label: 'Steps/frame', min: 1, max: 100, step: 1 },
-  { key: 'force', label: 'Click force', min: 500, max: 20000, step: 500 },
-  { key: 'dt', label: 'Timestep', min: 0.00001, max: 0.001, step: 0.00001, cold: true, format: v => v.toFixed(5) },
+  { key: 'viscosity', label: 'Viscosity', min: 0, max: 5, step: 0.1, format: v => v.toFixed(1) },
+  { key: 'force', label: 'Click force', min: 10, max: 1000, step: 10 },
+  { key: 'dt', label: 'Timestep', min: 0.00005, max: 0.0003, step: 0.00001, cold: true, format: v => v.toFixed(5) },
 ];
 
 function buildConfigPanel(): void {
@@ -189,11 +190,12 @@ function rebuildSim(): void {
 
   sim.reconstruct();
   particles = new ParticleSystem(config.particleCount, config.grid, config.grid);
+  dye = new DyeField(config.grid, config.grid);
   forceTime = 0;
 
   // Rebuild sonifier if audio was started
   if (audioStarted) {
-    sonifier = new Sonifier({ fundamental: 64, octaveScale: 1.75, masterGain: 0.3 });
+    sonifier = new Sonifier({ freqLow: 55, freqHigh: 4000, masterGain: 0.3 });
     audioStarted = false;
   }
 
@@ -277,6 +279,8 @@ function canvasInject(e: MouseEvent): void {
   const len = Math.sqrt(dx * dx + dy * dy) || 1;
   sim.injectImpulse(gx, gy, (dx / len) * config.force, (dy / len) * config.force);
   sim.reconstruct();
+  // Inject cool dye at click point
+  dye.inject(gx, gy, 0.1, 0.4, 0.9, 4);
 }
 
 let dragging = false;
@@ -297,26 +301,36 @@ document.addEventListener('keydown', (e) => {
   } else if (e.key === 's' || e.key === 'S') {
     ensureAudio();
     sonifier.toggle();
-  } else if (e.key === 'm' || e.key === 'M') {
-    mode = mode === 'sim' ? 'compose' : 'sim';
-    modeDisplay.textContent = `Mode: ${mode === 'sim' ? 'Simulation' : 'Compose'}`;
   } else if (e.key === 'a' || e.key === 'A') {
     ensureAudio();
     sonifier.nextStrategy();
-  } else if (e.key === 'f' || e.key === 'F') {
-    forcing = !forcing;
-    forceTime = 0;
+  } else if (e.key >= '1' && e.key <= '9') {
+    const modeIdx = parseInt(e.key);
+    if (modeIdx < sim.config.rank) {
+      if (forcedModes.has(modeIdx)) {
+        forcedModes.delete(modeIdx);
+      } else {
+        forcedModes.add(modeIdx);
+      }
+      modeDisplay.textContent = forcedModes.size > 0
+        ? `Modes: ${[...forcedModes].sort().join(', ')}`
+        : 'Modes: none';
+    }
+  } else if (e.key === '0') {
+    forcedModes.clear();
+    modeDisplay.textContent = 'Modes: none';
   } else if (e.key === 'r' || e.key === 'R') {
     sim.w.fill(0);
     sim.injectImpulse(config.grid / 2, config.grid / 2, 0, 1000);
     sim.reconstruct();
     particles.seed(config.grid, config.grid);
+    dye.clear();
     forceTime = 0;
-  } else if (e.key >= '1' && e.key <= '9' && mode === 'compose') {
-    const k = parseInt(e.key) - 1;
-    if (k < config.rank) {
-      sim.w[k] += 10;
-      sim.reconstruct();
+  } else if (e.key === 'Enter') {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen();
+    } else {
+      document.exitFullscreen();
     }
   }
 });
@@ -327,22 +341,45 @@ let lastFpsTime = performance.now();
 
 // --- Main loop ---
 function frame(): void {
-  if (!paused && mode === 'sim') {
+  if (!paused) {
     for (let i = 0; i < config.stepsPerFrame; i++) {
-      // Continuous forcing: oscillating jet from left side
-      if (forcing) {
+      // Mode-selective forcing: directly drive w[k] for toggled modes
+      if (forcedModes.size > 0) {
         forceTime += config.dt;
-        const gy = config.grid / 2 + Math.sin(forceTime * 3) * config.grid * 0.25;
-        sim.injectImpulse(2, gy, config.forceStrength, 0);
+        for (const k of forcedModes) {
+          const lam = sim.eigenvalue(k);
+          const phase = forceTime * Math.sqrt(lam) * 50;
+          sim.w[k] += Math.sin(phase) * config.forceStrength * 0.1;
+        }
       }
       sim.step();
     }
 
-    // Advect particles once per frame using the total elapsed time
-    particles.advect(sim.velocity, config.grid, config.grid, config.dt * config.stepsPerFrame, 1);
+    // Inject dye at forced mode antinodes
+    if (forcedModes.size > 0) {
+      for (const k of forcedModes) {
+        const { k1, k2 } = sim.pairs[k];
+        // Antinode is at the center of the first lobe: π/(2·k₁), π/(2·k₂)
+        const gx = (config.grid - 1) / (2 * k1);
+        const gy = (config.grid - 1) / (2 * k2);
+        // Color varies by mode index
+        const hue = k * 0.7;
+        dye.inject(gx, gy,
+          0.15 + 0.1 * Math.sin(hue),
+          0.1 + 0.1 * Math.sin(hue + 2),
+          0.15 + 0.1 * Math.sin(hue + 4),
+          3);
+      }
+    }
+
+    // Advect dye and particles once per frame
+    const frameDt = config.dt * config.stepsPerFrame;
+    dye.advect(sim.velocity, frameDt);
+    dye.dissipate(0.985);
+    particles.advect(sim.velocity, config.grid, config.grid, frameDt, 1);
   }
 
-  renderer.render(sim);
+  renderer.render(sim, dye);
   renderer.renderParticles(particles, config.grid, config.grid);
   updateModeTable();
 
@@ -354,7 +391,8 @@ function frame(): void {
   frameCount++;
   const now = performance.now();
   if (now - lastFpsTime >= 1000) {
-    fpsDisplay.textContent = `${frameCount} fps`;
+    const cflStr = sim.cfl.toFixed(3);
+    fpsDisplay.textContent = `${frameCount} fps · CFL ${cflStr}`;
     frameCount = 0;
     lastFpsTime = now;
   }

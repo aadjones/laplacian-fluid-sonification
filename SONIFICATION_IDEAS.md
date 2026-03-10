@@ -86,7 +86,7 @@ Noise → 32 parallel bandpasses → gain. Mode weights control Q and gain per f
 
 **Pros:** Physically motivated—literally "what would this cavity sound like." Continuous.
 **Cons:** 32 inharmonic partials = noise. The original problem.
-**Status:** Was the first implementation. Replaced by D.
+**Status:** Re-tuned with high-Q filters (Q 200–2000), cubic gain gating, log-log frequency spread (55–4000 Hz, ~6 octaves). Much cleaner—individual modes now ring as distinct pitches rather than colored noise. Active strategy alongside modal percussion and harmonic series.
 
 ## Ideas for Narrative / Arc
 

@@ -47,6 +47,9 @@ export class FluidSim {
   /** Current reconstructed velocity field: [u0,v0, u1,v1, ...] interleaved per cell */
   velocity: Float64Array;
 
+  /** CFL-like diagnostic: dt * max|wDot[k]| / max|w[k]|. Should stay < ~0.5. */
+  cfl = 0;
+
   constructor(config: Partial<FluidConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     const { rank, xRes, yRes } = this.config;
@@ -85,6 +88,15 @@ export class FluidSim {
       }
       wDot[k] = dot;
     }
+
+    // CFL diagnostic: max relative rate of change
+    let maxWDot = 0;
+    let maxW = 0;
+    for (let k = 0; k < rank; k++) {
+      if (Math.abs(wDot[k]) > maxWDot) maxWDot = Math.abs(wDot[k]);
+      if (Math.abs(w[k]) > maxW) maxW = Math.abs(w[k]);
+    }
+    this.cfl = maxW > 0 ? dt * maxWDot / maxW : 0;
 
     // Euler integration
     for (let k = 0; k < rank; k++) {

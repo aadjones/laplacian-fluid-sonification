@@ -11,29 +11,25 @@ import type { SonificationStrategy } from './strategy';
 import { FilterBankStrategy } from './strategies/filterBank';
 import { ModalPercussionStrategy } from './strategies/modalPercussion';
 import { HarmonicSeriesStrategy } from './strategies/harmonicSeries';
-import { SpectralEnvelopeStrategy } from './strategies/spectralEnvelope';
 
 export interface SonifierConfig {
-  fundamental: number;
-  octaveScale: number;
+  freqLow: number;
+  freqHigh: number;
   masterGain: number;
 }
 
 const DEFAULT_CONFIG: SonifierConfig = {
-  fundamental: 110,
-  octaveScale: 2,
+  freqLow: 55,
+  freqHigh: 4000,
   masterGain: 0.3,
 };
 
-/** All available strategies, in cycling order */
-function createStrategies(): SonificationStrategy[] {
-  return [
-    new FilterBankStrategy(),
-    new ModalPercussionStrategy(),
-    new HarmonicSeriesStrategy(),
-    new SpectralEnvelopeStrategy(),
-  ];
-}
+/** Strategy factory functions, in cycling order */
+const STRATEGY_FACTORIES: (() => SonificationStrategy)[] = [
+  () => new FilterBankStrategy(),
+  () => new ModalPercussionStrategy(),
+  () => new HarmonicSeriesStrategy(),
+];
 
 export class Sonifier {
   private ctx: AudioContext | null = null;
@@ -43,9 +39,10 @@ export class Sonifier {
   private eigenvalues: number[] = [];
   private running = false;
 
-  private strategies: SonificationStrategy[] = [];
   private activeIndex = 0;
   private activeStrategy: SonificationStrategy | null = null;
+  /** Per-strategy gain node so we can hard-cut output on dispose */
+  private strategyGain: GainNode | null = null;
 
   /** Callback fired when strategy changes (for UI updates) */
   onStrategyChange: ((name: string) => void) | null = null;
@@ -67,16 +64,26 @@ export class Sonifier {
     this.masterGainNode.connect(this.ctx.destination);
 
     const rank = sim.config.rank;
-    const { fundamental, octaveScale } = this.config;
+    const { freqLow, freqHigh } = this.config;
     this.frequencies = [];
     this.eigenvalues = [];
+
+    // Collect eigenvalues to find range
     for (let k = 0; k < rank; k++) {
-      const lam = sim.eigenvalue(k);
-      this.eigenvalues.push(lam);
-      this.frequencies.push(fundamental * Math.pow(lam, 1 / octaveScale));
+      this.eigenvalues.push(sim.eigenvalue(k));
+    }
+    const lamMin = this.eigenvalues[0];
+    const lamMax = this.eigenvalues[rank - 1];
+    const logLamRange = Math.log(lamMax) - Math.log(lamMin);
+
+    // Log-log mapping: eigenvalue range → frequency range (perceptually uniform)
+    for (let k = 0; k < rank; k++) {
+      const t = logLamRange > 0
+        ? (Math.log(this.eigenvalues[k]) - Math.log(lamMin)) / logLamRange
+        : 0;
+      this.frequencies.push(freqLow * Math.pow(freqHigh / freqLow, t));
     }
 
-    this.strategies = createStrategies();
     this.activeIndex = 0;
     this.activateStrategy(0);
     this.running = true;
@@ -85,27 +92,38 @@ export class Sonifier {
   private activateStrategy(index: number): void {
     if (!this.ctx || !this.masterGainNode) return;
 
-    // Dispose current strategy
-    this.activeStrategy?.dispose();
+    // Hard-cut previous strategy: dispose it, then disconnect its gain node
+    // so any lingering audio (in-flight pings, automation tails) is silenced
+    if (this.activeStrategy) {
+      this.activeStrategy.dispose();
+    }
+    if (this.strategyGain) {
+      this.strategyGain.gain.setValueAtTime(0, this.ctx.currentTime);
+      this.strategyGain.disconnect();
+      this.strategyGain = null;
+    }
 
+    // Fresh instance + isolated gain node
     this.activeIndex = index;
-    this.activeStrategy = this.strategies[index];
-    this.activeStrategy.init(this.ctx, this.masterGainNode, this.frequencies, this.eigenvalues);
+    this.strategyGain = this.ctx.createGain();
+    this.strategyGain.gain.value = 1;
+    this.strategyGain.connect(this.masterGainNode);
+
+    this.activeStrategy = STRATEGY_FACTORIES[index]();
+    this.activeStrategy.init(this.ctx, this.strategyGain, this.frequencies, this.eigenvalues);
     this.onStrategyChange?.(this.activeStrategy.name);
   }
 
   /** Cycle to the next strategy */
   nextStrategy(): void {
-    if (this.strategies.length === 0) return;
-    const next = (this.activeIndex + 1) % this.strategies.length;
-    this.activateStrategy(next);
+    const count = STRATEGY_FACTORIES.length;
+    this.activateStrategy((this.activeIndex + 1) % count);
   }
 
   /** Cycle to the previous strategy */
   prevStrategy(): void {
-    if (this.strategies.length === 0) return;
-    const prev = (this.activeIndex - 1 + this.strategies.length) % this.strategies.length;
-    this.activateStrategy(prev);
+    const count = STRATEGY_FACTORIES.length;
+    this.activateStrategy((this.activeIndex - 1 + count) % count);
   }
 
   /** Get the active strategy's name */
@@ -115,7 +133,7 @@ export class Sonifier {
 
   /** Get all strategy names */
   get strategyNames(): string[] {
-    return this.strategies.map(s => s.name);
+    return STRATEGY_FACTORIES.map(f => f().name);
   }
 
   /** Update from sim state — delegates to active strategy */
