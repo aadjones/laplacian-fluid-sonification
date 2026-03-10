@@ -31,6 +31,7 @@ const app = document.querySelector<HTMLDivElement>('#app')!;
 function createApp(): {
   canvas: HTMLCanvasElement;
   modeDisplay: HTMLDivElement;
+  strategyDisplay: HTMLDivElement;
   modeTable: HTMLDivElement;
   configPanel: HTMLDivElement;
   fpsDisplay: HTMLSpanElement;
@@ -69,6 +70,11 @@ function createApp(): {
   modeDisplay.textContent = 'Mode: Simulation';
   statusRow.appendChild(modeDisplay);
 
+  const strategyDisplay = document.createElement('div');
+  strategyDisplay.id = 'strategy-display';
+  strategyDisplay.textContent = 'Audio: —';
+  statusRow.appendChild(strategyDisplay);
+
   const fpsDisplay = document.createElement('span');
   fpsDisplay.id = 'fps-display';
   statusRow.appendChild(fpsDisplay);
@@ -77,7 +83,7 @@ function createApp(): {
 
   const instructions = document.createElement('div');
   instructions.id = 'instructions';
-  instructions.textContent = 'Drag canvas to inject vorticity · Space pause · S toggle sound · M switch sim/compose · R reset';
+  instructions.textContent = 'Drag canvas to inject vorticity · Space pause · S toggle sound · A cycle audio strategy · M switch sim/compose · R reset';
   controls.appendChild(instructions);
 
   const modeTable = document.createElement('div');
@@ -87,10 +93,10 @@ function createApp(): {
   container.appendChild(controls);
   app.appendChild(container);
 
-  return { canvas, modeDisplay, modeTable, configPanel, fpsDisplay };
+  return { canvas, modeDisplay, strategyDisplay, modeTable, configPanel, fpsDisplay };
 }
 
-const { canvas, modeDisplay, modeTable, configPanel, fpsDisplay } = createApp();
+const { canvas, modeDisplay, strategyDisplay, modeTable, configPanel, fpsDisplay } = createApp();
 let renderer = new FluidRenderer(canvas);
 
 // --- Config panel ---
@@ -242,6 +248,9 @@ function updateModeTable(): void {
 // --- Interaction ---
 function ensureAudio(): void {
   if (!audioStarted) {
+    sonifier.onStrategyChange = (name) => {
+      strategyDisplay.textContent = `Audio: ${name}`;
+    };
     sonifier.init(sim);
     audioStarted = true;
     buildModeTable();
@@ -283,6 +292,9 @@ document.addEventListener('keydown', (e) => {
   } else if (e.key === 'm' || e.key === 'M') {
     mode = mode === 'sim' ? 'compose' : 'sim';
     modeDisplay.textContent = `Mode: ${mode === 'sim' ? 'Simulation' : 'Compose'}`;
+  } else if (e.key === 'a' || e.key === 'A') {
+    ensureAudio();
+    sonifier.nextStrategy();
   } else if (e.key === 'r' || e.key === 'R') {
     sim.w.fill(0);
     sim.injectImpulse(config.grid / 2, config.grid / 2, 0, 1000);
