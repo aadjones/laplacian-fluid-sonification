@@ -7,7 +7,7 @@
  */
 
 import type { FluidSim } from '../sim/fluid';
-import type { SonificationStrategy } from './strategy';
+import type { SonificationStrategy, ModePair } from './strategy';
 import { FilterBankStrategy } from './strategies/filterBank';
 import { ModalPercussionStrategy } from './strategies/modalPercussion';
 import { HarmonicSeriesStrategy } from './strategies/harmonicSeries';
@@ -37,6 +37,7 @@ export class Sonifier {
   private config: SonifierConfig;
   private frequencies: number[] = [];
   private eigenvalues: number[] = [];
+  private pairs: ModePair[] = [];
   private running = false;
 
   private activeIndex = 0;
@@ -68,9 +69,10 @@ export class Sonifier {
     this.frequencies = [];
     this.eigenvalues = [];
 
-    // Collect eigenvalues to find range
+    // Collect eigenvalues and mode pairs
     for (let k = 0; k < rank; k++) {
       this.eigenvalues.push(sim.eigenvalue(k));
+      this.pairs.push({ k1: sim.pairs[k].k1, k2: sim.pairs[k].k2 });
     }
     const lamMin = this.eigenvalues[0];
     const lamMax = this.eigenvalues[rank - 1];
@@ -110,7 +112,7 @@ export class Sonifier {
     this.strategyGain.connect(this.masterGainNode);
 
     this.activeStrategy = STRATEGY_FACTORIES[index]();
-    this.activeStrategy.init(this.ctx, this.strategyGain, this.frequencies, this.eigenvalues);
+    this.activeStrategy.init(this.ctx, this.strategyGain, this.frequencies, this.eigenvalues, this.pairs);
     this.onStrategyChange?.(this.activeStrategy.name);
   }
 

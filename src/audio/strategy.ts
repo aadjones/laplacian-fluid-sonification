@@ -7,6 +7,12 @@
  * any sim backend (eigenfunction, conventional NS + projection, etc.).
  */
 
+/** Mode spatial indices, passed to strategies for panning etc. */
+export interface ModePair {
+  k1: number;
+  k2: number;
+}
+
 export interface SonificationStrategy {
   readonly name: string;
 
@@ -14,7 +20,7 @@ export interface SonificationStrategy {
    * Set up audio nodes. Called once when the strategy becomes active.
    * The strategy should connect its output to `master`.
    */
-  init(ctx: AudioContext, master: GainNode, frequencies: number[], eigenvalues: number[]): void;
+  init(ctx: AudioContext, master: GainNode, frequencies: number[], eigenvalues: number[], pairs: ModePair[]): void;
 
   /**
    * Called each frame with the current w vector (eigenmode coefficients).

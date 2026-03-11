@@ -10,7 +10,7 @@
  * of guaranteed harmonicity.
  */
 
-import type { SonificationStrategy } from '../strategy';
+import type { SonificationStrategy, ModePair } from '../strategy';
 
 const FUNDAMENTAL = 110; // A2
 
@@ -21,7 +21,7 @@ export class HarmonicSeriesStrategy implements SonificationStrategy {
   private oscillators: OscillatorNode[] = [];
   private gains: GainNode[] = [];
 
-  init(ctx: AudioContext, master: GainNode, frequencies: number[], _eigenvalues: number[]): void {
+  init(ctx: AudioContext, master: GainNode, frequencies: number[], _eigenvalues: number[], _pairs: ModePair[]): void {
     this.ctx = ctx;
 
     const rank = frequencies.length;

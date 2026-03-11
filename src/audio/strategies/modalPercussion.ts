@@ -6,7 +6,7 @@
  * of absolute w scale. Decay time inversely proportional to eigenvalue.
  */
 
-import type { SonificationStrategy } from '../strategy';
+import type { SonificationStrategy, ModePair } from '../strategy';
 
 const TRIGGER_SIGMA = 2.5;
 const BASE_DECAY = 2.0;
@@ -25,7 +25,7 @@ export class ModalPercussionStrategy implements SonificationStrategy {
   private lastTrigger: Float64Array | null = null;
   private activeVoices = 0;
 
-  init(ctx: AudioContext, master: GainNode, frequencies: number[], eigenvalues: number[]): void {
+  init(ctx: AudioContext, master: GainNode, frequencies: number[], eigenvalues: number[], _pairs: ModePair[]): void {
     this.ctx = ctx;
     this.master = master;
     this.frequencies = frequencies;
