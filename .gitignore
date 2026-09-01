@@ -25,3 +25,6 @@ dist-ssr
 
 # Playwright MCP
 .playwright-mcp
+
+# Source PDFs (42MB; publicly available, extracted text is committed instead)
+reference/*.pdf

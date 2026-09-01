@@ -1,17 +1,27 @@
 /**
- * Strategy G: Resonant Filter Bank with spatial panning and cascade dynamics.
+ * Strategy G: Resonant Filter Bank.
  *
- * Noise source → N parallel bandpass filters → per-mode panner → gain → master.
- * Mode weights control filter Q and gain. Spatial panning from mode k₁ index.
- * Cascade dynamics: spectral centroid tracking modulates overall brightness
- * to exaggerate the natural attack→decay arc of energy redistribution.
+ * Noise source -> N parallel bandpass filters -> per-mode panner -> gain -> master.
+ *
+ * The envelope is taken from the fluid rather than imposed on it. Under the
+ * sqrt-lambda mapping each mode is a resonator whose amplitude |w[k]| already
+ * decays viscously at rate nu*lambda, so high modes die away in seconds while low
+ * modes ring for a minute. Reading that out with an absolute (not per-frame
+ * normalised) gain is what gives a strike its attack and its bright->dark decay.
  */
 
 import type { SonificationStrategy, ModePair } from '../strategy';
+import { ModeAmplitudes } from '../amplitude';
 
 const NOISE_DURATION = 2;
-const BASE_Q = 200;
-const MAX_Q = 2000;
+
+/** Q of the lowest mode. Higher modes are damped by the 1/sqrt(lambda) law below. */
+const Q_BASE = 240;
+const Q_MIN = 8;
+const Q_MAX = 400;
+
+/** Compensates for L1-normalised partials summing incoherently. */
+const OUTPUT_SCALE = 2.5;
 
 export class FilterBankStrategy implements SonificationStrategy {
   readonly name = 'Filter Bank';
@@ -21,16 +31,13 @@ export class FilterBankStrategy implements SonificationStrategy {
   private filters: BiquadFilterNode[] = [];
   private panners: StereoPannerNode[] = [];
   private gains: GainNode[] = [];
-  private cascadeGain: GainNode | null = null;
 
-  // Cascade dynamics state
-  private prevCentroid = 0;
-  private prevEnergy = 0;
+  private env: ModeAmplitudes = new ModeAmplitudes(0);
 
-  init(ctx: AudioContext, master: GainNode, frequencies: number[], _eigenvalues: number[], pairs: ModePair[]): void {
+  init(ctx: AudioContext, master: GainNode, frequencies: number[], eigenvalues: number[], pairs: ModePair[]): void {
     this.ctx = ctx;
+    this.env = new ModeAmplitudes(frequencies.length);
 
-    // Create white noise buffer
     const sampleRate = ctx.sampleRate;
     const bufferSize = sampleRate * NOISE_DURATION;
     const noiseBuffer = ctx.createBuffer(1, bufferSize, sampleRate);
@@ -43,27 +50,28 @@ export class FilterBankStrategy implements SonificationStrategy {
     this.noiseSource.buffer = noiseBuffer;
     this.noiseSource.loop = true;
 
-    // Cascade dynamics: overall gain envelope that exaggerates energy changes
-    this.cascadeGain = ctx.createGain();
-    this.cascadeGain.gain.value = 1;
-    this.cascadeGain.connect(master);
-
-    // Find max k1 for panning normalization
     let maxK1 = 1;
     for (const p of pairs) {
       if (p.k1 > maxK1) maxK1 = p.k1;
     }
+    const lamMin = Math.min(...eigenvalues);
 
     for (let k = 0; k < frequencies.length; k++) {
       const filter = ctx.createBiquadFilter();
       filter.type = 'bandpass';
       filter.frequency.value = frequencies[k];
-      filter.Q.value = BASE_Q;
+      // Q is a property of the resonator, not of the excitation, so it is set
+      // once. A mode decays at nu*lambda and sits at f ~ sqrt(lambda), so its
+      // quality factor goes as f/(nu*lambda) ~ 1/sqrt(lambda): low modes ring
+      // sharp and long, high modes are broad and damped. That ordering is the
+      // struck-bell law. The previous 200-2000 activity ramp had no physical
+      // referent and gave the bottom of the bank an 11.6 s tail, which is what
+      // smeared everything into mud.
+      filter.Q.value = Math.max(Q_MIN, Math.min(Q_MAX, Q_BASE / Math.sqrt(eigenvalues[k] / lamMin)));
 
-      // Spatial panning from k₁: low k₁ = left, high k₁ = right
       const panner = ctx.createStereoPanner();
-      const pan = (pairs[k].k1 - 1) / (maxK1 - 1) * 2 - 1; // -1 to +1
-      panner.pan.value = pan * 0.8; // Don't hard-pan to extremes
+      const pan = maxK1 > 1 ? ((pairs[k].k1 - 1) / (maxK1 - 1)) * 2 - 1 : 0;
+      panner.pan.value = pan * 0.8;
 
       const gain = ctx.createGain();
       gain.gain.value = 0;
@@ -71,7 +79,7 @@ export class FilterBankStrategy implements SonificationStrategy {
       this.noiseSource.connect(filter);
       filter.connect(panner);
       panner.connect(gain);
-      gain.connect(this.cascadeGain);
+      gain.connect(master);
 
       this.filters.push(filter);
       this.panners.push(panner);
@@ -82,49 +90,10 @@ export class FilterBankStrategy implements SonificationStrategy {
   }
 
   update(w: Float64Array, rank: number): void {
-    let maxW = 0;
-    for (let k = 0; k < rank; k++) maxW = Math.max(maxW, Math.abs(w[k]));
-    if (maxW < 1e-15) maxW = 1;
-
     const now = this.ctx.currentTime;
-
-    // Compute spectral centroid and total energy for cascade dynamics
-    let energy = 0;
-    let centroid = 0;
+    this.env.update(w, rank, now, OUTPUT_SCALE);
     for (let k = 0; k < rank; k++) {
-      const e = w[k] * w[k];
-      energy += e;
-      centroid += e * k;
-    }
-    centroid = energy > 0 ? centroid / energy : rank / 2;
-
-    // Cascade direction: positive = energy moving to higher modes (brightening)
-    const centroidDelta = centroid - this.prevCentroid;
-    this.prevCentroid = centroid;
-
-    // Energy delta: positive = energy increasing (impulse just hit)
-    const energyDelta = energy - this.prevEnergy;
-    this.prevEnergy = energy;
-
-    // Cascade gain: boost on energy injection, exaggerate decay
-    // Impulse → loud attack. Viscous decay → quieter, more intimate
-    const energyRate = this.prevEnergy > 0 ? energyDelta / this.prevEnergy : 0;
-    // Map: big positive energyRate → boost (up to 2x), negative → attenuate (down to 0.3x)
-    const cascadeMul = Math.max(0.3, Math.min(2.0, 1.0 + energyRate * 5));
-    this.cascadeGain!.gain.setTargetAtTime(cascadeMul, now, 0.05);
-
-    for (let k = 0; k < rank; k++) {
-      const activity = Math.abs(w[k]) / maxW;
-
-      // Q: more resonant when active, modulated by cascade direction
-      // Upward cascade (centroidDelta > 0) = sharper, more tense
-      const cascadeQ = 1 + Math.max(0, centroidDelta) * 2;
-      const q = (BASE_Q + activity * (MAX_Q - BASE_Q)) * Math.min(cascadeQ, 2);
-      this.filters[k].Q.setTargetAtTime(q, now, 0.03);
-
-      // Cube for sharp gating: quiet modes stay silent, active modes sing
-      const amplitude = activity * activity * activity * 4;
-      this.gains[k].gain.setTargetAtTime(amplitude, now, 0.03);
+      this.gains[k].gain.setTargetAtTime(this.env.amps[k], now, this.env.timeConstant(k));
     }
   }
 
@@ -134,11 +103,9 @@ export class FilterBankStrategy implements SonificationStrategy {
     for (const f of this.filters) f.disconnect();
     for (const p of this.panners) p.disconnect();
     for (const g of this.gains) g.disconnect();
-    this.cascadeGain?.disconnect();
     this.noiseSource = null;
     this.filters = [];
     this.panners = [];
     this.gains = [];
-    this.cascadeGain = null;
   }
 }

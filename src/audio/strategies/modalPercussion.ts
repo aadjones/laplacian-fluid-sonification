@@ -7,6 +7,7 @@
  */
 
 import type { SonificationStrategy, ModePair } from '../strategy';
+import { PeakTracker } from '../amplitude';
 
 const TRIGGER_SIGMA = 2.5;
 const BASE_DECAY = 2.0;
@@ -24,6 +25,9 @@ export class ModalPercussionStrategy implements SonificationStrategy {
   private wPrev: Float64Array | null = null;
   private lastTrigger: Float64Array | null = null;
   private activeVoices = 0;
+  private peak = new PeakTracker();
+  private lamMin = 1;
+  private lamMax = 1;
 
   init(ctx: AudioContext, master: GainNode, frequencies: number[], eigenvalues: number[], _pairs: ModePair[]): void {
     this.ctx = ctx;
@@ -33,6 +37,11 @@ export class ModalPercussionStrategy implements SonificationStrategy {
     this.wPrev = new Float64Array(frequencies.length);
     this.lastTrigger = new Float64Array(frequencies.length);
     this.activeVoices = 0;
+    this.peak.reset();
+    // buildIjPairs enumerates by max(k1,k2), not by lambda, so eigenvalues is
+    // not sorted; taking [0] and [rank-1] as the range is wrong at most ranks.
+    this.lamMin = Math.min(...eigenvalues);
+    this.lamMax = Math.max(...eigenvalues);
   }
 
   update(w: Float64Array, rank: number): void {
@@ -64,11 +73,16 @@ export class ModalPercussionStrategy implements SonificationStrategy {
       if (deltas[k] > maxDelta) maxDelta = deltas[k];
     }
 
+    // How violent this frame is against the loudest gesture so far. Without it
+    // maxDelta renormalises every frame, so a gentle swirl and a hard stir ring
+    // out at exactly the same level and the pings carry no dynamics.
+    const violence = this.peak.update(maxDelta, now);
+
     for (let k = 0; k < rank; k++) {
       if (deltas[k] > threshold && deltas[k] > minAbsDelta
           && (now - this.lastTrigger[k]) > COOLDOWN) {
-        const amp = Math.min((deltas[k] - mean) / (maxDelta - mean || 1), 1.0);
-        this.triggerPing(k, amp * 0.6 + 0.1);
+        const rel = Math.min((deltas[k] - mean) / (maxDelta - mean || 1), 1.0);
+        this.triggerPing(k, (rel * 0.6 + 0.1) * violence);
         this.lastTrigger[k] = now;
       }
     }
@@ -82,9 +96,7 @@ export class ModalPercussionStrategy implements SonificationStrategy {
     const now = this.ctx.currentTime;
     const freq = this.frequencies[k];
 
-    const maxLam = this.eigenvalues[this.eigenvalues.length - 1] || 1;
-    const minLam = this.eigenvalues[0] || 1;
-    const t = (this.eigenvalues[k] - minLam) / (maxLam - minLam || 1);
+    const t = (this.eigenvalues[k] - this.lamMin) / (this.lamMax - this.lamMin || 1);
     const decay = BASE_DECAY - t * (BASE_DECAY - MIN_DECAY);
 
     const gain = Math.min(amplitude, 1.0);

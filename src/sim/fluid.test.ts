@@ -36,15 +36,17 @@ describe('FluidSim', () => {
     const sim = new FluidSim({ rank: 9, xRes: 16, yRes: 16, viscosity: 0 });
     sim.injectImpulse(8, 8, 0, 1000);
 
-    let e0 = 0;
-    for (let i = 0; i < sim.w.length; i++) e0 += sim.w[i] * sim.w[i];
+    // Energy is Σ w²/λ. The basis is orthogonal but not orthonormal
+    // (‖φ_k‖² = π²/4λ_k), so Σ w² is the enstrophy, which is NOT pinned.
+    const energy = () => {
+      let e = 0;
+      for (let i = 0; i < sim.w.length; i++) e += sim.w[i] * sim.w[i] / sim.eigenvalue(i);
+      return e;
+    };
 
+    const e0 = energy();
     for (let t = 0; t < 100; t++) sim.step();
-
-    let e1 = 0;
-    for (let i = 0; i < sim.w.length; i++) e1 += sim.w[i] * sim.w[i];
-
-    expect(e1).toBeCloseTo(e0, 8);
+    expect(energy()).toBeCloseTo(e0, 8);
   });
 
   it('energy decays with viscosity', () => {

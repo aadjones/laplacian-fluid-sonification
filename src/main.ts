@@ -7,7 +7,7 @@ import { DyeField } from './sim/dye';
 
 // --- Configuration (editable via panel) ---
 const config = {
-  rank: 32,
+  rank: 256,
   grid: 128,
   canvasSize: 512,
   stepsPerFrame: 2,
@@ -91,7 +91,7 @@ function createApp(): {
 
   const instructions = document.createElement('div');
   instructions.id = 'instructions';
-  instructions.textContent = 'Drag to inject vorticity · 1-9 toggle modes · 0 clear modes · Space pause · S sound · A audio strategy · R reset · Enter fullscreen';
+  instructions.textContent = 'Drag to inject vorticity · 1-9 toggle modes · 0 clear modes · Space pause · S sound · A audio strategy · M pitch mapping · R reset · Enter fullscreen';
   controls.appendChild(instructions);
 
   const modeTable = document.createElement('div');
@@ -119,7 +119,7 @@ interface SliderDef {
 }
 
 const sliders: SliderDef[] = [
-  { key: 'rank', label: 'Modes (rank)', min: 4, max: 64, step: 4, cold: true },
+  { key: 'rank', label: 'Modes (rank)', min: 4, max: 256, step: 4, cold: true },
   { key: 'grid', label: 'Grid', min: 32, max: 256, step: 32, cold: true },
   { key: 'viscosity', label: 'Viscosity', min: 0, max: 5, step: 0.1, format: v => v.toFixed(1) },
   { key: 'force', label: 'Click force', min: 10, max: 1000, step: 10 },
@@ -185,7 +185,7 @@ function rebuildSim(): void {
   let energy = 0;
   for (let i = 0; i < sim.w.length; i++) energy += sim.w[i] * sim.w[i];
   if (energy < 1e-10) {
-    sim.injectImpulse(config.grid / 2, config.grid / 2, 0, 1000);
+    sim.injectImpulse(config.grid * 0.42, config.grid * 0.37, 380, 1000);
   }
 
   sim.reconstruct();
@@ -256,30 +256,67 @@ function updateModeTable(): void {
 }
 
 // --- Interaction ---
+function refreshAudioDisplay(): void {
+  strategyDisplay.textContent = audioStarted
+    ? `Audio: ${sonifier.strategyName} · ${sonifier.mappingLabel}`
+    : 'Audio: —';
+}
+
 function ensureAudio(): void {
   if (!audioStarted) {
-    sonifier.onStrategyChange = (name) => {
-      strategyDisplay.textContent = `Audio: ${name}`;
-    };
+    sonifier.onStrategyChange = () => refreshAudioDisplay();
+    sonifier.onMappingChange = () => refreshAudioDisplay();
     sonifier.init(sim);
     audioStarted = true;
     buildModeTable();
+    refreshAudioDisplay();
   }
 }
 
-function canvasInject(e: MouseEvent): void {
+/** Drag speed, in grid cells per second, that reaches full click force. */
+const POINTER_REF_SPEED = 300;
+
+let lastPointer: { gx: number; gy: number; t: number } | null = null;
+
+function canvasPos(e: MouseEvent): { gx: number; gy: number } {
   const rect = canvas.getBoundingClientRect();
   const cx = (e.clientX - rect.left) / rect.width;
   const cy = (e.clientY - rect.top) / rect.height;
-  const gx = Math.min(cx * (config.grid - 1), config.grid - 2);
-  const gy = Math.min(cy * (config.grid - 1), config.grid - 2);
+  return {
+    gx: Math.min(cx * (config.grid - 1), config.grid - 2),
+    gy: Math.min(cy * (config.grid - 1), config.grid - 2),
+  };
+}
 
-  const dx = gx - config.grid / 2;
-  const dy = gy - config.grid / 2;
-  const len = Math.sqrt(dx * dx + dy * dy) || 1;
-  sim.injectImpulse(gx, gy, (dx / len) * config.force, (dy / len) * config.force);
-  sim.reconstruct();
-  // Inject cool dye at click point
+/**
+ * Stir the fluid along the gesture.
+ *
+ * The force direction is the direction the pointer moved and its magnitude
+ * scales with drag speed, so dragging left and right through the same cell now
+ * do opposite things and a slow stir is gentler than a fast one. Previously the
+ * direction was radial from the canvas centre, which meant the entire input
+ * channel was one position: no direction, no speed. A press that never moves
+ * imparts no momentum, which is what stirring a real fluid does.
+ */
+function canvasInject(e: MouseEvent): void {
+  const { gx, gy } = canvasPos(e);
+  const now = performance.now();
+
+  if (lastPointer) {
+    const dtSec = Math.max(1e-3, (now - lastPointer.t) / 1000);
+    const dgx = gx - lastPointer.gx;
+    const dgy = gy - lastPointer.gy;
+    const dist = Math.sqrt(dgx * dgx + dgy * dgy);
+    if (dist > 1e-6) {
+      const speed = dist / dtSec;
+      const strength = Math.min(1, speed / POINTER_REF_SPEED) * config.force;
+      sim.injectImpulse(gx, gy, (dgx / dist) * strength, (dgy / dist) * strength);
+      // step() reconstructs every frame; only paused injection needs it here.
+      if (paused) sim.reconstruct();
+    }
+  }
+
+  lastPointer = { gx, gy, t: now };
   dye.inject(gx, gy, 0.1, 0.4, 0.9, 4);
 }
 
@@ -287,12 +324,16 @@ let dragging = false;
 canvas.addEventListener('mousedown', (e) => {
   ensureAudio();
   dragging = true;
+  lastPointer = null; // don't measure velocity across the gap between drags
   canvasInject(e);
 });
 canvas.addEventListener('mousemove', (e) => {
   if (dragging) canvasInject(e);
 });
-window.addEventListener('mouseup', () => { dragging = false; });
+window.addEventListener('mouseup', () => {
+  dragging = false;
+  lastPointer = null;
+});
 
 document.addEventListener('keydown', (e) => {
   if (e.key === ' ') {
@@ -304,6 +345,10 @@ document.addEventListener('keydown', (e) => {
   } else if (e.key === 'a' || e.key === 'A') {
     ensureAudio();
     sonifier.nextStrategy();
+  } else if (e.key === 'm' || e.key === 'M') {
+    ensureAudio();
+    sonifier.nextMapping();
+    buildModeTable();
   } else if (e.key >= '1' && e.key <= '9') {
     const modeIdx = parseInt(e.key);
     if (modeIdx < sim.config.rank) {
@@ -321,7 +366,9 @@ document.addEventListener('keydown', (e) => {
     modeDisplay.textContent = 'Modes: none';
   } else if (e.key === 'r' || e.key === 'R') {
     sim.w.fill(0);
-    sim.injectImpulse(config.grid / 2, config.grid / 2, 0, 1000);
+    // Off-centre and off-axis: injecting at the exact centre sits on a symmetry
+    // point that puts 0% of the energy into the k=1 and k=3 shells.
+    sim.injectImpulse(config.grid * 0.42, config.grid * 0.37, 380, 1000);
     sim.reconstruct();
     particles.seed(config.grid, config.grid);
     dye.clear();
@@ -379,13 +426,15 @@ function frame(): void {
     particles.advect(sim.velocity, config.grid, config.grid, frameDt, 1);
   }
 
-  renderer.render(sim, dye);
-  renderer.renderParticles(particles, config.grid, config.grid);
-  updateModeTable();
-
+  // Audio first: updateFromSim used to run after rendering, handing the audio
+  // path ~5.3 ms of pure latency per frame for nothing.
   if (audioStarted) {
     sonifier.updateFromSim(sim);
   }
+
+  renderer.render(sim, dye);
+  renderer.renderParticles(particles, config.grid, config.grid);
+  updateModeTable();
 
   // FPS
   frameCount++;

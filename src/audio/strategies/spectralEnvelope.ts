@@ -11,6 +11,7 @@
  */
 
 import type { SonificationStrategy } from '../strategy';
+import { ModeAmplitudes } from '../amplitude';
 
 const FUNDAMENTAL = 110;
 const BASE_Q = 8;
@@ -23,9 +24,11 @@ export class SpectralEnvelopeStrategy implements SonificationStrategy {
   private carrier: OscillatorNode | null = null;
   private filters: BiquadFilterNode[] = [];
   private gains: GainNode[] = [];
+  private env: ModeAmplitudes = new ModeAmplitudes(0);
 
   init(ctx: AudioContext, master: GainNode, frequencies: number[], _eigenvalues: number[]): void {
     this.ctx = ctx;
+    this.env = new ModeAmplitudes(frequencies.length);
 
     // Sawtooth carrier — rich harmonic content for the filters to shape
     this.carrier = ctx.createOscillator();
@@ -56,22 +59,19 @@ export class SpectralEnvelopeStrategy implements SonificationStrategy {
   }
 
   update(w: Float64Array, rank: number): void {
-    let maxW = 0;
-    for (let k = 0; k < rank; k++) maxW = Math.max(maxW, Math.abs(w[k]));
-    if (maxW < 1e-15) maxW = 1;
-
     const now = this.ctx.currentTime;
+    // L1 shape x absolute loudness. See ../amplitude.
+    const loudness = this.env.update(w, rank, now, 1);
 
     for (let k = 0; k < rank; k++) {
-      const activity = Math.abs(w[k]) / maxW;
+      const shape = this.env.amps[k];
 
-      // Q tracks activity: active modes are sharper resonances
-      const q = BASE_Q + activity * (MAX_Q - BASE_Q);
+      // Q tracks how strongly this formant is being driven
+      const q = BASE_Q + Math.min(1, shape * rank) * (MAX_Q - BASE_Q);
       this.filters[k].Q.setTargetAtTime(q, now, 0.03);
 
-      // Gain: squared for contrast, scaled down to avoid clipping with many active modes
-      const amplitude = activity * activity * 0.15;
-      this.gains[k].gain.setTargetAtTime(amplitude, now, 0.03);
+      const amplitude = shape * loudness * 0.6;
+      this.gains[k].gain.setTargetAtTime(amplitude, now, this.env.timeConstant(k));
     }
   }
 

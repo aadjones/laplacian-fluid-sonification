@@ -175,3 +175,141 @@ export function getSlabK(C: Float64Array, rank: number, k: number): Float64Array
   }
   return slab;
 }
+
+/**
+ * Sparse form of the structure tensor.
+ *
+ * C is dominated by zeros: the trig product-to-sum identities behind
+ * structureCoefficientAnalytic only admit k1 in {a1-b1, a1+b1, b1-a1} and
+ * likewise for k2, so at most nine (k1,k2) candidates survive per (a,b) pair.
+ * Measured density at rank 256 is well under 1%, and the dense array would be
+ * rank^3 = 16.7M doubles (134 MB). Storing only the nonzeros turns the advection
+ * step from O(rank^3) into O(nnz).
+ */
+export interface SparseTensor {
+  readonly nnz: number;
+  readonly ks: Int32Array;
+  readonly as: Int32Array;
+  readonly bs: Int32Array;
+  readonly coeffs: Float64Array;
+}
+
+/**
+ * Build the structure tensor in sparse form.
+ *
+ * Enumerates only the (k1,k2) admitted by the selection rules instead of
+ * sweeping all rank^3 triples, then evaluates the same analytic coefficient, so
+ * the stored values are identical to buildStructureTensor's nonzeros.
+ */
+export function buildSparseTensor(pairs: IjPair[]): SparseTensor {
+  const rank = pairs.length;
+  const reverse = buildIjReverse(pairs);
+
+  const ks: number[] = [];
+  const as: number[] = [];
+  const bs: number[] = [];
+  const coeffs: number[] = [];
+
+  for (let a = 0; a < rank; a++) {
+    const { k1: a1, k2: a2 } = pairs[a];
+    for (let b = 0; b < rank; b++) {
+      const { k1: b1, k2: b2 } = pairs[b];
+
+      // Selection rules: only these k can give a nonzero coefficient.
+      const cand1 = [a1 - b1, a1 + b1, b1 - a1];
+      const cand2 = [a2 - b2, a2 + b2, b2 - a2];
+
+      for (let i = 0; i < 3; i++) {
+        const k1 = cand1[i];
+        if (k1 < 1) continue;
+        if (cand1.indexOf(k1) !== i) continue; // dedupe repeated candidates
+        for (let j = 0; j < 3; j++) {
+          const k2 = cand2[j];
+          if (k2 < 1) continue;
+          if (cand2.indexOf(k2) !== j) continue;
+
+          const k = reverse.get(ijKey(k1, k2));
+          if (k === undefined) continue;
+
+          const coef = structureCoefficientAnalytic(a1, a2, b1, b2, k1, k2);
+          if (coef === 0) continue;
+
+          ks.push(k);
+          as.push(a);
+          bs.push(b);
+          coeffs.push(coef);
+        }
+      }
+    }
+  }
+
+  return {
+    nnz: coeffs.length,
+    ks: Int32Array.from(ks),
+    as: Int32Array.from(as),
+    bs: Int32Array.from(bs),
+    coeffs: Float64Array.from(coeffs),
+  };
+}
+
+/**
+ * Precomputed tables for separable velocity reconstruction.
+ *
+ * The eigenfunction is a product of a function of x and a function of y, so the
+ * field never needs the explicit (2*xRes*yRes) x rank matrix U — which is 67 MB
+ * at rank 256 and costs rank*xRes*yRes multiply-adds per frame to apply.
+ * Grouping the modes by k1 lets reconstruction run as two passes instead:
+ * O(rank*yRes) to collapse each k1 group over y, then O(maxK1*xRes*yRes) to
+ * sweep x. At rank 256 that is ~16x fewer operations and no matrix at all.
+ */
+export interface SeparableBasis {
+  readonly maxK: number;
+  readonly xRes: number;
+  readonly yRes: number;
+  /** sin(k*x) / cos(k*x) indexed [k * xRes + ix]; likewise for y. */
+  readonly sinX: Float64Array;
+  readonly cosX: Float64Array;
+  readonly sinY: Float64Array;
+  readonly cosY: Float64Array;
+  /** Modes sharing a k1, as groupModes[groupStart[k1] .. groupStart[k1+1]). */
+  readonly groupStart: Int32Array;
+  readonly groupModes: Int32Array;
+}
+
+export function buildSeparableBasis(pairs: IjPair[], xRes: number, yRes: number): SeparableBasis {
+  const rank = pairs.length;
+  let maxK = 1;
+  for (const p of pairs) {
+    if (p.k1 > maxK) maxK = p.k1;
+    if (p.k2 > maxK) maxK = p.k2;
+  }
+
+  const dx = Math.PI / (xRes - 1);
+  const dy = Math.PI / (yRes - 1);
+  const sinX = new Float64Array((maxK + 1) * xRes);
+  const cosX = new Float64Array((maxK + 1) * xRes);
+  const sinY = new Float64Array((maxK + 1) * yRes);
+  const cosY = new Float64Array((maxK + 1) * yRes);
+
+  for (let k = 1; k <= maxK; k++) {
+    for (let ix = 0; ix < xRes; ix++) {
+      sinX[k * xRes + ix] = Math.sin(k * ix * dx);
+      cosX[k * xRes + ix] = Math.cos(k * ix * dx);
+    }
+    for (let iy = 0; iy < yRes; iy++) {
+      sinY[k * yRes + iy] = Math.sin(k * iy * dy);
+      cosY[k * yRes + iy] = Math.cos(k * iy * dy);
+    }
+  }
+
+  // Bucket mode indices by k1 (counting sort).
+  const counts = new Int32Array(maxK + 2);
+  for (let m = 0; m < rank; m++) counts[pairs[m].k1 + 1]++;
+  const groupStart = new Int32Array(maxK + 2);
+  for (let k = 1; k <= maxK + 1; k++) groupStart[k] = groupStart[k - 1] + counts[k];
+  const cursor = Int32Array.from(groupStart);
+  const groupModes = new Int32Array(rank);
+  for (let m = 0; m < rank; m++) groupModes[cursor[pairs[m].k1]++] = m;
+
+  return { maxK, xRes, yRes, sinX, cosX, sinY, cosY, groupStart, groupModes };
+}
