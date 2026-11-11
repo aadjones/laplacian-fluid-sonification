@@ -49,14 +49,63 @@ Every one of these was confirmed by measurement, not inspection.
 | R6 | Gesture carries direction and speed | a stir is a stir, not a click target |
 | R7 | Shared `ModeAmplitudes`/`PeakTracker`; L1 across all four strategies | all four can swell and decay |
 
-## Open, roughly by payoff over cost
+## State on 2026-11-11
 
-1. **Ekman drag on the lowest modes.** The principled way to arrest the condensate and get R3 back on by default. Few lines. This is what real 2D turbulence experiments and geophysical models do.
-2. **Larsen feedback** through `setCoefficients` (D13). Requires it to become additive and the energy correction partial, or the clamp silently cancels self-oscillation. The one thing the 2017 system could never do, because it could not run in real time.
-3. **The Room** (composition.md). Domain aspect ratio as a playable parameter: at r=1.03 the degenerate pairs split into a chorus beating at 0.5-9 Hz, each rate locked to its own frequency. Returning to r=1 is a cadence that is literally the room becoming square. Testable as sonification-only.
-4. **Sediment** (composition.md). Leaky long-memory accumulators so the instrument stays warm where it has been played. The macrostructure attack: irreversibility, therefore form.
-5. **Spectrum to sonify.** At defaults, 1.5-2.3 effective active modes. The bell is correct but thin; forcing that sustains a spectrum is the prerequisite for most of the above.
-6. **Decorrelate degenerate filters.** 13 of 32 (many more at 256) share a noise source, summing to a centred phantom with no width.
+Everything above this line was written on 2026-08-31, against an instrument that no
+longer exists. Commit `f3f7bcd` replaced the four switchable strategies with one body
+(hammer, bow, sustain), made silence the ground state, raised the default rank to 576,
+and removed the two alternative frequency mappings. Read the tables above as history.
+
+**Target.** CURRENTS 2027 (Santa Fe), Installation category. Application due
+2026-12-08, judged on video, stills and a work statement. If accepted, visitors play it
+unattended, 2027-06-11 to 06-20, through a small MIDI controller with a few simple
+controls (planned, not built).
+
+**Baseline, measured with `tools/measure.mjs`** (110 s pointer-only phrase, real output,
+AudioContext running throughout, 60 fps):
+
+| | value |
+|---|---|
+| active modes in `w` (participation ratio, of 576) | 45 after one tap, ~185 while playing, 3.5 at rest |
+| audible partials (within 30 dB of the strongest) | 14-19 after one tap, 17-20 while playing |
+| spectral centroid | 170-290 Hz |
+| ring of one tap to -20 dB | 4.9 s |
+| level at rest | -92 dB RMS (silence) |
+| same tap before and after 40 s of playing | no meaningful difference: the instrument has no memory |
+
+So the August figure of "1.5-2.3 effective active modes" is superseded. `w` is broad
+while it is being played. The thinness is on the audio side (a dark, low spectrum of
+about 20 partials) and in time: nothing a visitor does outlasts five seconds.
+
+One defect found and fixed on the way (D14): a point strike claimed every free hammer
+voice, so the 96-voice pool sat at 62-96 while playing and later strikes were starved.
+Per-strike budget plus quietest-voice stealing: 23-24 audible partials on the same phrase.
+
+## Open, ranked for the December 8 video
+
+The arc the video needs: a stranger's touch that grows, remembers and resolves.
+
+1. **Sediment** (composition.md 4), reshaped. A slow per-mode memory with three outputs:
+   longer ring where it has been played, a faint held hum of the remembered modes, and
+   the memory drawn as its own standing pattern. Time constant 15-20 s, not 45. No tonic
+   or transposition machinery. An idle drain, which doubles as the gallery reset.
+2. **The Room** (composition.md 3), near regime, sound only, automatic. Playing stretches
+   the room up to ~3% off square so mirror pairs beat; rest relaxes it to unison. Families
+   stay exact harmonic series at any aspect ratio. The hammer's fixed 3.4-cent pair
+   detune has to become the room's variable.
+3. **Brightness.** Centroid 170-290 Hz is dark. Not yet diagnosed: candidates are the
+   contact-time rolloff, the `lambda^-0.75` ring law, and the 110 Hz base.
+4. **Decorrelate the bow's degenerate filters.** Half done: the hammer has detuned,
+   panned pairs. The bow still feeds every filter one noise source.
+
+After acceptance, not before:
+
+5. **MIDI control surface** for the installation. Keep gestures behind named actions so
+   pointer and MIDI drive the same code.
+6. **Larsen feedback** through `setCoefficients` (D13, still open). Unattended
+   self-oscillation needs a governor first.
+7. **Ekman drag** and the condensate arc. Needs a driven fluid, which conflicts with the
+   silent ground state; its timescale at this rank is unmeasured.
 
 ## Killed
 

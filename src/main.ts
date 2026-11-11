@@ -4,6 +4,7 @@ import { FluidRenderer } from './viz/renderer';
 import { Sonifier } from './audio/sonifier';
 import { ParticleSystem } from './sim/particles';
 import { DyeField } from './sim/dye';
+import { Sediment } from './sim/sediment';
 import { buildFamilies, familyMask, strikeFamily, strikeVector, strikeWeights, type HarmonicFamily } from './sim/families';
 
 // --- Configuration (editable via panel) ---
@@ -31,6 +32,12 @@ let sim = new FluidSim({ rank: config.rank, xRes: config.grid, yRes: config.grid
 let sonifier = new Sonifier({ masterGain: 0.3 });
 let particles = new ParticleSystem(config.particleCount, config.grid, config.grid);
 let dye = new DyeField(config.grid, config.grid);
+/** Where the instrument has been touched. See sim/sediment.ts. */
+let sediment = new Sediment(config.rank);
+/** Share of the memory's headroom one tap fills in the modes it excites most. */
+const TAP_DEPOSIT = 0.2;
+/** The same, per second of full-speed stirring. */
+const STIR_DEPOSIT_RATE = 0.6;
 
 /**
  * Sustain: hold the selected stack against the damping (H).
@@ -265,6 +272,7 @@ function rebuildSim(): void {
   sim.reconstruct();
   particles = new ParticleSystem(config.particleCount, config.grid, config.grid);
   dye = new DyeField(config.grid, config.grid);
+  sediment = new Sediment(config.rank);
   vorticity = new Float64Array(config.grid * config.grid);
 
   // Both the stack list and the mask are indexed by rank, so neither survives.
@@ -535,7 +543,11 @@ function canvasInject(e: MouseEvent): void {
     if (dist > 1e-6) {
       const speed = dist / dtSec;
       const strength = Math.min(1, speed / POINTER_REF_SPEED) * config.strikeForce;
-      sim.injectImpulse(gx, gy, (dgx / dist) * strength, (dgy / dist) * strength);
+      const excited = injectAndRead(gx, gy, (dgx / dist) * strength, (dgy / dist) * strength);
+      sediment.deposit(
+        excited,
+        STIR_DEPOSIT_RATE * (strength / config.strikeForce) * Math.min(dtSec, 0.05),
+      );
       // step() reconstructs every frame; only paused injection needs it here.
       if (paused) sim.reconstruct();
     }
@@ -560,6 +572,13 @@ let strikeSpectrum = new Float64Array(config.rank);
  * spectrum is designed. Both are read off the same projection.
  */
 function strikeAt(gx: number, gy: number, fx: number, fy: number): void {
+  const excited = injectAndRead(gx, gy, fx, fy);
+  sediment.deposit(excited, TAP_DEPOSIT);
+  sonifier.strike(excited, strikeVelocity(), config.hammerHardness);
+}
+
+/** Push the fluid at a point and return what that excited, |Δw| per mode. */
+function injectAndRead(gx: number, gy: number, fx: number, fy: number): Float64Array {
   const rank = sim.config.rank;
   if (strikeSpectrum.length !== rank) strikeSpectrum = new Float64Array(rank);
   for (let k = 0; k < rank; k++) strikeSpectrum[k] = sim.w[k];
@@ -567,7 +586,7 @@ function strikeAt(gx: number, gy: number, fx: number, fy: number): void {
   for (let k = 0; k < rank; k++) {
     strikeSpectrum[k] = Math.abs(sim.w[k] - strikeSpectrum[k]);
   }
-  sonifier.strike(strikeSpectrum, strikeVelocity(), config.hammerHardness);
+  return strikeSpectrum;
 }
 
 let dragging = false;
@@ -621,11 +640,9 @@ document.addEventListener('keydown', (e) => {
       const fam = families[stackIndex];
       strikeFamily(sim.w, fam, config.strikeForce, config.strikePosition);
       sim.reconstruct();
-      sonifier.strike(
-        strikeVector(sim.config.rank, fam, config.strikePosition),
-        strikeVelocity(),
-        config.hammerHardness,
-      );
+      const struck = strikeVector(sim.config.rank, fam, config.strikePosition);
+      sediment.deposit(struck, TAP_DEPOSIT);
+      sonifier.strike(struck, strikeVelocity(), config.hammerHardness);
     }
   } else if (e.key === 'h' || e.key === 'H') {
     ensureAudio();
@@ -640,6 +657,7 @@ document.addEventListener('keydown', (e) => {
     sim.reconstruct();
     particles.seed(config.grid, config.grid);
     dye.clear();
+    sediment.clear();
   } else if (e.key === 'Enter') {
     if (!document.fullscreenElement) {
       document.documentElement.requestFullscreen();
@@ -730,11 +748,13 @@ function frame(): void {
     dye.advect(sim.velocity, frameDt);
     dye.dissipate(0.985);
     particles.advect(sim.velocity, config.grid, config.grid, frameDt, 1);
+    sediment.leak(frameSeconds);
   }
 
   // Audio first: updateFromSim used to run after rendering, handing the audio
   // path ~5.3 ms of pure latency per frame for nothing.
   if (audioStarted) {
+    sonifier.setMemory(sediment.m);
     sonifier.updateFromSim(sim);
   }
 
@@ -763,5 +783,6 @@ if (import.meta.env.DEV) {
     get sim() { return sim; },
     get config() { return config; },
     get sonifier() { return sonifier; },
+    get sediment() { return sediment; },
   };
 }

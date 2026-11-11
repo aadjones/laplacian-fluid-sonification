@@ -14,7 +14,7 @@ The `w` vector (eigenmode coefficients) is the universal state shared between si
 npm install           # Install dependencies
 npm run dev           # Dev server (Vite)
 npm run build         # Type check + production build
-npm test              # Run 46 tests (vitest)
+npm test              # Run 52 tests (vitest)
 npm run test:watch    # Watch mode tests
 ```
 
@@ -25,6 +25,7 @@ npm run test:watch    # Watch mode tests
 - `src/sim/basis.ts` — Eigenfunction basis construction, ij pair ordering, analytic structure tensor C
 - `src/sim/fluid.ts` — `FluidSim` class: simulation step loop, velocity reconstruction, impulse injection, `setCoefficients` (sound→fluid)
 - `src/sim/families.ts` — Harmonic mode families ("stacks"): the instrument's notes, plus strike weights
+- `src/sim/sediment.ts` — The instrument's memory: per-mode record of where it has been touched, fed by gestures, leaking over 25 s
 - `src/sim/dye.ts` — Passive scalar (RGB dye) transport via semi-Lagrangian advection
 - `src/viz/renderer.ts` — Canvas 2D renderer: dye primary layer + vorticity underlay + particle overlay
 - `src/audio/sonifier.ts` — The instrument's body: AudioContext, output chain, √λ frequency mapping, mode mask
@@ -58,6 +59,15 @@ geometry excites there (broadband, inharmonic, a drumhead); striking a stack pla
 harmonic family (pitched, a tuned bar). Neither spectrum is designed; both are read off
 the same projection.
 
+**Memory (Sediment)**: every strike and stir deposits into `sediment.m`, which leaks with a
+25 s time constant. The hammer reads it two ways: remembered modes ring up to 3x longer, and
+the 24 most-remembered are held as a quiet hum. An untouched instrument has no memory and is
+silent; the hum is earned and drains.
+
+**Measuring the sound**: `node tools/measure.mjs <label>` (dev server running) plays a fixed
+110 s pointer phrase and records the real output; `node tools/compare.mjs a b` prints two
+renders side by side. Use it before and after any audio change.
+
 **Damping is the damper pedal**: viscosity sets the fluid's decay rate ν·λ and each
 partial's ring time 1/(ν·λ) at once. The UI calls it Damping.
 
@@ -69,7 +79,7 @@ partial's ring time 1/(ν·λ) at once. The UI calls it Damping.
 
 ## Testing
 
-46 tests in `src/sim/basis.test.ts`, `src/sim/fluid.test.ts` and `src/sim/families.test.ts` covering:
+52 tests in `src/sim/basis.test.ts`, `src/sim/fluid.test.ts`, `src/sim/families.test.ts` and `src/sim/sediment.test.ts` covering:
 - ij pair ordering and round-trip
 - Eigenfunction boundary conditions, divergence-free property, orthogonality
 - Structure tensor sparsity, self-interaction symmetry, slab extraction
@@ -77,6 +87,7 @@ partial's ring time 1/(ν·λ) at once. The UI calls it Damping.
 - Impulse injection, coefficient setting, velocity reconstruction
 - Nontrivial dynamics (w evolves under advection)
 - Harmonic family enumeration, mode masks, strike weights and the hammer's strike-point notch
+- Sediment deposit, saturation and frame-rate-independent decay
 
 Run a single test file: `npx vitest run src/sim/basis.test.ts`
 

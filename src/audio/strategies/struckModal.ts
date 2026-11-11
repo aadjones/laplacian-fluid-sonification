@@ -163,6 +163,35 @@ const STEAL_FADE = 0.006;
  */
 const OUTPUT_SCALE = 2.3;
 
+/**
+ * Memory lengthens the ring: a mode that has been played a lot rings up to
+ * (1 + RING_MEMORY) times as long. The instrument warms where it is used.
+ */
+const RING_MEMORY = 2;
+
+/**
+ * The hum: what the instrument remembers, held very quietly.
+ *
+ * A strike is over in five seconds, so without this nothing a player does
+ * outlasts their hand. The most-remembered modes are held as coherent partials
+ * at a level set by the memory alone, so the hum blooms slowly while the
+ * instrument is played, lingers after, and drains to silence with the memory.
+ * It is earned, never a drone: an untouched instrument has no memory and makes
+ * no sound.
+ */
+const HUM_VOICES = 24;
+/** Memory below this is not worth a voice. */
+const HUM_FLOOR = 0.03;
+/** Amplitude of a fully-remembered lowest mode, before master gain. */
+const HUM_LEVEL = 0.06;
+/** Tilt toward the low modes, as a power of lambda_min/lambda. */
+const HUM_TILT = 0.25;
+/** The hum swells slower than it is struck, and lets go slower still. */
+const HUM_RISE_TC = 1.5;
+const HUM_FALL_TC = 1.0;
+/** Seconds between re-choosing which modes hum. */
+const HUM_INTERVAL = 0.25;
+
 /** How far the fluid may dim or swell a ringing partial. */
 const MOD_FLOOR = 0.45;
 const MOD_CEIL = 1.5;
@@ -197,7 +226,16 @@ interface Partial {
   /** Struck partials only: what is needed to estimate the level it has now. */
   amp?: number;
   t0?: number;
-  tau?: number;
+  /** Seconds each polarisation plane takes to fall 60 dB. */
+  fastDuration?: number;
+  slowDuration?: number;
+}
+
+interface HumVoice {
+  env: GainNode;
+  oscs: OscillatorNode[];
+  nodes: AudioNode[];
+  level: number;
 }
 
 export class StruckModalStrategy implements SonificationStrategy {
@@ -215,6 +253,14 @@ export class StruckModalStrategy implements SonificationStrategy {
   private lamMin = 1;
   private maxK1 = 1;
   private viscosity = 0.5;
+
+  private memory: Float64Array | null = null;
+  private hum = new Map<number, HumVoice>();
+  private lastHumTime = -Infinity;
+
+  setMemory(memory: Float64Array | null): void {
+    this.memory = memory;
+  }
 
   init(ctx: AudioContext, master: GainNode, frequencies: number[], eigenvalues: number[], pairs: ModePair[]): void {
     this.ctx = ctx;
@@ -317,10 +363,12 @@ export class StruckModalStrategy implements SonificationStrategy {
 
   /** Estimated present amplitude of a ringing partial; held ones are never stolen. */
   private levelNow(p: Partial, now: number): number {
-    if (p.held || p.amp === undefined || p.t0 === undefined || p.tau === undefined) return Infinity;
+    if (p.held || p.amp === undefined || p.t0 === undefined
+      || p.fastDuration === undefined || p.slowDuration === undefined) return Infinity;
     const t = Math.max(0, now - p.t0);
-    return p.amp * (PLANE_SPLIT * Math.exp(-t / (p.tau * PLANE_FAST))
-      + (1 - PLANE_SPLIT) * Math.exp(-t / (p.tau * PLANE_SLOW)));
+    // Each plane is a ramp to -60 dB over its duration: 6.9 time constants.
+    return p.amp * (PLANE_SPLIT * Math.exp((-6.9 * t) / p.fastDuration)
+      + (1 - PLANE_SPLIT) * Math.exp((-6.9 * t) / p.slowDuration));
   }
 
   /**
@@ -480,6 +528,12 @@ export class StruckModalStrategy implements SonificationStrategy {
 
   private firePartial(k: number, freq: number, amp: number, now: number): void {
     const tau = this.ringTime(k);
+    // Memory stretches the ring after the cap below, not before it. The cap
+    // already sets how long the low partials really ring (it shortens anything
+    // slower than 3.5 s), so stretching tau alone changed nothing audible.
+    const remembered = this.memory ? this.memory[k] ?? 0 : 0;
+    const stretch = 1 + RING_MEMORY * remembered;
+    const durations = [0, 0];
 
     // One modulation gain for the whole partial: the fluid colours a partial,
     // not one of its polarisation planes.
@@ -503,7 +557,8 @@ export class StruckModalStrategy implements SonificationStrategy {
       const planeAmp = amp * (fast ? PLANE_SPLIT : 1 - PLANE_SPLIT);
       // -60 dB is 6.9 time constants. Capped so a long low ring does not hold
       // an oscillator alive for minutes after it stopped being audible.
-      const duration = Math.min(planeTau * 6.9, TAU_MAX);
+      const duration = Math.min(planeTau * 6.9, TAU_MAX) * stretch;
+      durations[fast ? 0 : 1] = duration;
 
       const env = this.ctx.createGain();
       env.gain.setValueAtTime(0, now);
@@ -542,7 +597,10 @@ export class StruckModalStrategy implements SonificationStrategy {
       };
     }
 
-    this.partials.push({ mode: k, mod, refW: -1, nodes, amp, t0: now, tau });
+    this.partials.push({
+      mode: k, mod, refW: -1, nodes, amp, t0: now,
+      fastDuration: durations[0], slowDuration: durations[1],
+    });
   }
 
   /**
@@ -558,8 +616,12 @@ export class StruckModalStrategy implements SonificationStrategy {
    * note it did not strike; the envelope owns the decay.
    */
   update(w: Float64Array, rank: number): void {
-    if (this.partials.length === 0) return;
     const now = this.ctx.currentTime;
+    if (now - this.lastHumTime >= HUM_INTERVAL) {
+      this.lastHumTime = now;
+      this.updateHum(now);
+    }
+    if (this.partials.length === 0) return;
 
     for (const p of this.partials) {
       if (p.mode >= rank) continue;
@@ -575,7 +637,81 @@ export class StruckModalStrategy implements SonificationStrategy {
     }
   }
 
+  /** Re-choose which modes hum and move every hum voice toward its memory. */
+  private updateHum(now: number): void {
+    const m = this.memory;
+    const chosen: { k: number; level: number }[] = [];
+    if (m) {
+      const nyquist = this.ctx.sampleRate * 0.45;
+      for (let k = 0; k < m.length; k++) {
+        if (m[k] < HUM_FLOOR || !(this.frequencies[k] > 0) || this.frequencies[k] > nyquist) continue;
+        const level = HUM_LEVEL * m[k] * Math.pow(this.lamMin / this.eigenvalues[k], HUM_TILT);
+        chosen.push({ k, level });
+      }
+      chosen.sort((a, b) => b.level - a.level);
+      if (chosen.length > HUM_VOICES) chosen.length = HUM_VOICES;
+    }
+
+    const keep = new Set<number>();
+    for (const { k, level } of chosen) {
+      keep.add(k);
+      let v = this.hum.get(k);
+      if (!v) {
+        v = this.startHum(k, now);
+        this.hum.set(k, v);
+      }
+      v.env.gain.setTargetAtTime(level, now, level > v.level ? HUM_RISE_TC : HUM_FALL_TC);
+      v.level = level;
+    }
+    for (const [k, v] of this.hum) {
+      if (keep.has(k)) continue;
+      v.env.gain.setTargetAtTime(0, now, HUM_FALL_TC / 3);
+      const nodes = v.nodes;
+      v.oscs[0].onended = () => { for (const nd of nodes) nd.disconnect(); };
+      for (const o of v.oscs) o.stop(now + HUM_FALL_TC * 2);
+      this.hum.delete(k);
+    }
+  }
+
+  private startHum(k: number, now: number): HumVoice {
+    const freq = this.frequencies[k];
+    const env = this.ctx.createGain();
+    env.gain.setValueAtTime(0, now);
+    env.connect(this.master);
+
+    const basePan = this.maxK1 > 1
+      ? (((this.pairs[k]?.k1 ?? 1) - 1) / (this.maxK1 - 1)) * 2 - 1
+      : 0;
+    const ratio = Math.pow(2, (DETUNE_CENTS * jitter(0.3)) / 2 / 1200);
+    const nodes: AudioNode[] = [env];
+    const oscs: OscillatorNode[] = [];
+    for (const side of [-1, 1]) {
+      const pan = this.ctx.createStereoPanner();
+      pan.pan.value = Math.max(-1, Math.min(1,
+        basePan * SPREAD_STACK + side * SPREAD_POLARISATION,
+      ));
+      const half = this.ctx.createGain();
+      half.gain.value = 0.5;
+      pan.connect(half);
+      half.connect(env);
+
+      const osc = this.ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = side < 0 ? freq / ratio : freq * ratio;
+      osc.connect(pan);
+      osc.start(now);
+      oscs.push(osc);
+      nodes.push(osc, pan, half);
+    }
+    return { env, oscs, nodes, level: 0 };
+  }
+
   dispose(): void {
+    for (const v of this.hum.values()) {
+      for (const o of v.oscs) { try { o.stop(); } catch { /* already stopped */ } }
+      for (const nd of v.nodes) nd.disconnect();
+    }
+    this.hum.clear();
     for (const p of this.partials) {
       p.held = false;
       for (const nd of p.nodes) {

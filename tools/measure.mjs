@@ -123,13 +123,15 @@ async function poll() {
       rank: w ? w.length : 0,
       participation: l2 > 0 ? (l1 * l1) / l2 : 0,
       wL1: l1,
+      memory: window.__lfs?.sediment?.total ?? 0,
+      hum: window.__lfs?.sonifier?.strategies?.[0]?.hum?.size ?? 0,
       voices: window.__lfs?.sonifier?.strategies?.[0]?.partials?.length ?? -1,
       fps: document.querySelector('#fps-display')?.textContent ?? '',
     };
   });
   const buf = Buffer.from(r.pcm, 'base64');
   samples.push(new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4).slice());
-  state.push({ t: (Date.now() - t0) / 1000, ctxState: r.ctxState, ctxTime: r.ctxTime, participation: r.participation, wL1: r.wL1, rank: r.rank, voices: r.voices, fps: r.fps, sampleRate: r.sampleRate });
+  state.push({ t: (Date.now() - t0) / 1000, ctxState: r.ctxState, ctxTime: r.ctxTime, participation: r.participation, wL1: r.wL1, rank: r.rank, voices: r.voices, memory: r.memory, hum: r.hum, fps: r.fps, sampleRate: r.sampleRate });
 }
 let polling = true;
 const poller = (async () => { while (polling) { await poll(); await sleep(500); } })();

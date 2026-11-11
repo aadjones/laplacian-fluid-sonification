@@ -65,6 +65,12 @@ export interface SonificationStrategy {
   setDamping?(viscosity: number): void;
 
   /**
+   * The instrument's memory of where it has been played: one value in [0,1] per
+   * mode, read live each frame. See sim/sediment.ts. Optional.
+   */
+  setMemory?(memory: Float64Array | null): void;
+
+  /**
    * Tear down audio nodes. Called when switching away from this strategy.
    */
   dispose(): void;

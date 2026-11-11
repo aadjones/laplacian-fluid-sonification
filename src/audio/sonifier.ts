@@ -76,6 +76,7 @@ export class Sonifier {
   private modeMask: Float64Array | null = null;
   private maskedW = new Float64Array(0);
   private maskedStrike = new Float64Array(0);
+  private maskedMemory = new Float64Array(0);
 
   private strategies: SonificationStrategy[] = [];
   /** Last viscosity seen, re-applied whenever the excitations are built. */
@@ -139,6 +140,7 @@ export class Sonifier {
     this.frequencies = computeFrequencies(this.eigenvalues, this.config.freqBase);
     this.maskedW = new Float64Array(rank);
     this.maskedStrike = new Float64Array(rank);
+    this.maskedMemory = new Float64Array(rank);
 
     // One shared gain for every excitation, so they sum into the same body.
     this.outputGain = this.ctx.createGain();
@@ -211,6 +213,20 @@ export class Sonifier {
       w = this.maskedStrike;
     }
     for (const s of this.strategies) s.sustain?.(w, level, hardness);
+  }
+
+  /**
+   * Hand the excitations the instrument's memory (sim/sediment.ts), masked like
+   * everything else so a soloed stack only remembers aloud what it contains.
+   * Call once per frame, before `updateFromSim`.
+   */
+  setMemory(memory: Float64Array): void {
+    if (!this.running) return;
+    const n = Math.min(memory.length, this.maskedMemory.length);
+    for (let k = 0; k < n; k++) {
+      this.maskedMemory[k] = this.modeMask ? memory[k] * this.modeMask[k] : memory[k];
+    }
+    for (const s of this.strategies) s.setMemory?.(this.maskedMemory);
   }
 
   /** Forward the damping slider to excitations that ring on their own. */
