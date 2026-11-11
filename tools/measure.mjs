@@ -171,12 +171,13 @@ const probe = async () => {
   await page.evaluate(([cx, cy]) => {
     window.__reseed();
     const c = document.querySelector('canvas#fluid');
-    c.dispatchEvent(new MouseEvent('mousedown', { clientX: cx, clientY: cy, bubbles: true }));
-    window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    c.dispatchEvent(new PointerEvent('pointerdown', { clientX: cx, clientY: cy, bubbles: true, pointerId: 1 }));
+    c.dispatchEvent(new PointerEvent('pointerup', { clientX: cx, clientY: cy, bubbles: true, pointerId: 1 }));
   }, [x, y]);
 };
 await until(2); mark('probe1'); await probe();
 await until(16); mark('stir'); await stir(0.55, 0.5, 0.2, 4, 3);
+await page.screenshot({ path: join(outDir, `${label}-after-stir.png`) });
 await until(32); mark('busy');
 {
   // 40 s of playing: a tap every 2 s walking a fixed lattice, a stir every 8 s.
@@ -187,6 +188,7 @@ await until(32); mark('busy');
     else await tap(...pts[i % 6]);
   }
 }
+await page.screenshot({ path: join(outDir, `${label}-busy.png`) });
 await until(76); mark('probe2'); await probe();
 await until(90); mark('idle');
 await until(110); mark('end');

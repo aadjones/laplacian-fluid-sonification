@@ -1,273 +1,31 @@
-:root {
-  font-family: 'SF Mono', 'Fira Code', monospace;
-  line-height: 1.5;
-  color: #e0e0e0;
-  background-color: #0a0a0a;
+/*
+  [page]
+    [stage]      <- fills the viewport, centres its child
+      canvas     <- square, as large as the shorter side allows
+*/
+
+* {
+  box-sizing: border-box;
 }
 
 body {
   margin: 0;
-  display: flex;
-  justify-content: center;
-  padding: 2rem 1rem;
+  background: #05060a;
+  overflow: hidden;
 }
 
-#app {
-  max-width: 900px;
-  width: 100%;
-}
-
-#container {
+#stage {
+  width: 100vw;
+  height: 100dvh;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 1rem;
-}
-
-h1 {
-  font-size: 1.4rem;
-  font-weight: 300;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: #888;
-  margin: 0;
+  justify-content: center;
 }
 
 #fluid {
-  border: 1px solid #222;
+  width: min(100vw, 100dvh);
+  height: min(100vw, 100dvh);
+  display: block;
+  touch-action: none;
   cursor: crosshair;
-  image-rendering: pixelated;
-}
-
-#controls {
-  width: 100%;
-  max-width: 512px;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-#mode-display,
-#stack-display {
-  font-size: 0.9rem;
-  color: #aaa;
-}
-
-#instructions {
-  font-size: 0.75rem;
-  color: #555;
-  line-height: 1.8;
-}
-
-
-/* --- Config panel --- */
-#main-area {
-  display: flex;
-  gap: 1.5rem;
-  align-items: flex-start;
-}
-
-#config-panel {
-  min-width: 200px;
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
-}
-
-.panel-heading {
-  font-size: 0.75rem;
-  color: #555;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  border-bottom: 1px solid #222;
-  padding-bottom: 0.3rem;
-}
-
-.config-row {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-}
-
-.config-row label {
-  font-size: 0.7rem;
-  color: #666;
-}
-
-.config-row input[type="range"] {
-  width: 100%;
-  accent-color: #666;
-  height: 4px;
-}
-
-.config-value {
-  font-size: 0.7rem;
-  color: #888;
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-}
-
-#status-row {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 0.25rem 1rem;
-}
-
-#fps-display {
-  font-size: 0.75rem;
-  color: #555;
-  font-variant-numeric: tabular-nums;
-}
-
-/* Fullscreen: canvas fills viewport, hide chrome */
-:fullscreen body {
-  padding: 0;
-  background: black;
-}
-
-:fullscreen #app {
-  max-width: none;
-}
-
-:fullscreen #container {
-  height: 100dvh;
-  justify-content: center;
-}
-
-:fullscreen h1,
-:fullscreen #side-panel,
-:fullscreen #controls {
-  display: none;
-}
-
-:fullscreen #main-area {
-  gap: 0;
-}
-
-:fullscreen #fluid {
-  border: none;
-  width: 100vmin;
-  height: 100vmin;
-}
-
-@media (max-width: 750px) {
-  #main-area {
-    flex-direction: column;
-    align-items: center;
-  }
-  #config-panel {
-    width: 100%;
-    max-width: 512px;
-  }
-}
-
-/* --- Stack picker ---
-   [main-area]
-     [canvas]
-     [side-panel]          <- mobile: full width under the canvas
-       [config-panel]
-       [stack-picker]
-         [stack-picker-head]  <- "Stacks - 91" + rich/pitch toggle
-         [stack-chips]        <- scrollable list, one chip per stack
-*/
-#side-panel {
-  width: 100%;
-  max-width: 512px;
-  display: flex;
-  flex-direction: column;
-  gap: 1.25rem;
-}
-
-@media (min-width: 751px) {
-  #side-panel {
-    width: auto;
-    max-width: none;
-    min-width: 220px;
-  }
-}
-
-#stack-picker {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-}
-
-.stack-picker-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 0.5rem;
-}
-
-.stack-sort {
-  display: flex;
-  gap: 0.25rem;
-}
-
-.stack-sort button {
-  font-family: inherit;
-  font-size: 0.65rem;
-  letter-spacing: 0.05em;
-  color: #666;
-  background: #141414;
-  border: 1px solid #262626;
-  border-radius: 3px;
-  padding: 0.1em 0.45em;
-  cursor: pointer;
-}
-
-.stack-sort button:hover {
-  color: #aaa;
-}
-
-.stack-sort button.is-active {
-  color: #ddd;
-  background: #262626;
-  border-color: #3a3a3a;
-}
-
-#stack-chips {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  max-height: 40dvh;
-  overflow-y: auto;
-}
-
-.stack-chip {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 0.5rem;
-  font-family: inherit;
-  font-size: 0.7rem;
-  font-variant-numeric: tabular-nums;
-  text-align: left;
-  color: #777;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 3px;
-  padding: 0.15em 0.4em;
-  cursor: pointer;
-}
-
-.stack-chip:hover {
-  color: #bbb;
-  background: #141414;
-}
-
-.stack-chip.is-active {
-  color: #e0e0e0;
-  background: #1e1e1e;
-  border-color: #3a3a3a;
-}
-
-.stack-chip-meta {
-  color: #555;
-}
-
-.stack-chip.is-active .stack-chip-meta {
-  color: #999;
 }
