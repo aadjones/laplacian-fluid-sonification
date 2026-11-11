@@ -47,7 +47,8 @@ h1 {
   gap: 0.5rem;
 }
 
-#mode-display {
+#mode-display,
+#stack-display {
   font-size: 0.9rem;
   color: #aaa;
 }
@@ -58,38 +59,6 @@ h1 {
   line-height: 1.8;
 }
 
-kbd {
-  background: #222;
-  border: 1px solid #333;
-  border-radius: 3px;
-  padding: 0.1em 0.4em;
-  font-family: inherit;
-  font-size: 0.85em;
-}
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.75rem;
-}
-
-th {
-  text-align: left;
-  color: #555;
-  font-weight: 400;
-  padding: 0.2em 0.5em;
-  border-bottom: 1px solid #222;
-}
-
-td {
-  padding: 0.15em 0.5em;
-  color: #777;
-  font-variant-numeric: tabular-nums;
-}
-
-tr:hover td {
-  color: #bbb;
-}
 
 /* --- Config panel --- */
 #main-area {
@@ -140,8 +109,10 @@ tr:hover td {
 
 #status-row {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
-  align-items: center;
+  align-items: baseline;
+  gap: 0.25rem 1rem;
 }
 
 #fps-display {
@@ -166,7 +137,7 @@ tr:hover td {
 }
 
 :fullscreen h1,
-:fullscreen #config-panel,
+:fullscreen #side-panel,
 :fullscreen #controls {
   display: none;
 }
@@ -190,4 +161,113 @@ tr:hover td {
     width: 100%;
     max-width: 512px;
   }
+}
+
+/* --- Stack picker ---
+   [main-area]
+     [canvas]
+     [side-panel]          <- mobile: full width under the canvas
+       [config-panel]
+       [stack-picker]
+         [stack-picker-head]  <- "Stacks - 91" + rich/pitch toggle
+         [stack-chips]        <- scrollable list, one chip per stack
+*/
+#side-panel {
+  width: 100%;
+  max-width: 512px;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+@media (min-width: 751px) {
+  #side-panel {
+    width: auto;
+    max-width: none;
+    min-width: 220px;
+  }
+}
+
+#stack-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.stack-picker-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.stack-sort {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.stack-sort button {
+  font-family: inherit;
+  font-size: 0.65rem;
+  letter-spacing: 0.05em;
+  color: #666;
+  background: #141414;
+  border: 1px solid #262626;
+  border-radius: 3px;
+  padding: 0.1em 0.45em;
+  cursor: pointer;
+}
+
+.stack-sort button:hover {
+  color: #aaa;
+}
+
+.stack-sort button.is-active {
+  color: #ddd;
+  background: #262626;
+  border-color: #3a3a3a;
+}
+
+#stack-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 40dvh;
+  overflow-y: auto;
+}
+
+.stack-chip {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-family: inherit;
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  color: #777;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 0.15em 0.4em;
+  cursor: pointer;
+}
+
+.stack-chip:hover {
+  color: #bbb;
+  background: #141414;
+}
+
+.stack-chip.is-active {
+  color: #e0e0e0;
+  background: #1e1e1e;
+  border-color: #3a3a3a;
+}
+
+.stack-chip-meta {
+  color: #555;
+}
+
+.stack-chip.is-active .stack-chip-meta {
+  color: #999;
 }

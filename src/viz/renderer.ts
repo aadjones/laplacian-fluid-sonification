@@ -23,25 +23,17 @@ export class FluidRenderer {
   /**
    * Render dye field blended with vorticity underlay.
    * Dye is the primary visual; vorticity shows through where dye is absent.
+   *
+   * `vorticity` is supplied by the caller (see `FluidSim.computeVorticity`)
+   * rather than finite-differenced from the velocity here, so that a masked
+   * field can be drawn: soloing a harmonic family paints that stack's standing
+   * pattern alone. It also stops this from allocating a grid-sized array on
+   * every frame. `vortGain` brightens the underlay, which matters when a solo
+   * makes the pattern the subject rather than a texture behind the dye.
    */
-  render(sim: FluidSim, dye: DyeField): void {
+  render(sim: FluidSim, dye: DyeField, vorticity: Float64Array, vortGain = 1): void {
     const { xRes, yRes } = sim.config;
     const fieldSize = xRes * yRes;
-    const v = sim.velocity;
-
-    // Compute vorticity for underlay
-    const vorticity = new Float64Array(fieldSize);
-    const dx = Math.PI / (xRes - 1);
-    const dy = Math.PI / (yRes - 1);
-
-    for (let iy = 1; iy < yRes - 1; iy++) {
-      for (let ix = 1; ix < xRes - 1; ix++) {
-        const idx = iy * xRes + ix;
-        const dvdx = (v[fieldSize + idx + 1] - v[fieldSize + idx - 1]) / (2 * dx);
-        const dudy = (v[idx + xRes] - v[idx - xRes]) / (2 * dy);
-        vorticity[idx] = dvdx - dudy;
-      }
-    }
 
     let maxVort = 0;
     for (let i = 0; i < fieldSize; i++) {
@@ -64,9 +56,9 @@ export class FluidRenderer {
         const vort = vorticity[idx] / maxVort;
         let vr: number, vg: number, vb: number;
         if (vort > 0) {
-          vr = vort * 40; vg = vort * 15; vb = vort * 8;
+          vr = vort * 40 * vortGain; vg = vort * 15 * vortGain; vb = vort * 8 * vortGain;
         } else {
-          vr = -vort * 8; vg = -vort * 15; vb = -vort * 40;
+          vr = -vort * 8 * vortGain; vg = -vort * 15 * vortGain; vb = -vort * 40 * vortGain;
         }
 
         // Dye layer (primary)

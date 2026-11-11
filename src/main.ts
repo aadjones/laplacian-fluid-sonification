@@ -4,31 +4,75 @@ import { FluidRenderer } from './viz/renderer';
 import { Sonifier } from './audio/sonifier';
 import { ParticleSystem } from './sim/particles';
 import { DyeField } from './sim/dye';
+import { buildFamilies, familyMask, strikeFamily, strikeVector, strikeWeights, type HarmonicFamily } from './sim/families';
 
 // --- Configuration (editable via panel) ---
 const config = {
-  rank: 256,
+  rank: 576,
   grid: 128,
   canvasSize: 512,
   stepsPerFrame: 2,
   dt: 0.0001,
   viscosity: 0.5,
-  force: 300,
   particleCount: 8000,
-  forceStrength: 50,
+  /** How hard you play. Sets tap force, bow pressure, strike level and velocity. */
+  strikeForce: 300,
+  maxHarmonics: 8,
+  /** Hammer: 0 is a felt mallet, 1 a metal tine. See audio/strategies/struckModal. */
+  hammerHardness: 0.55,
+  /** Fractional strike point. Near 1/7 notches the septimal partial. */
+  strikePosition: 0.13,
 };
 
 // --- Mutable state ---
 let audioStarted = false;
 let paused = false;
 let sim = new FluidSim({ rank: config.rank, xRes: config.grid, yRes: config.grid, dt: config.dt, viscosity: config.viscosity });
-let sonifier = new Sonifier({ freqLow: 55, freqHigh: 4000, masterGain: 0.3 });
+let sonifier = new Sonifier({ masterGain: 0.3 });
 let particles = new ParticleSystem(config.particleCount, config.grid, config.grid);
 let dye = new DyeField(config.grid, config.grid);
-let forceTime = 0;
 
-// Mode-selective forcing: which modes are being driven (toggle with number keys)
-const forcedModes = new Set<number>([1]); // start with mode 1 (the (2,1) mode)
+/**
+ * Sustain: hold the selected stack against the damping (H).
+ *
+ * This replaces the old per-mode forcing on 1-9, which pumped individual modes
+ * sinusoidally at √λ·50 — a rate with no referent, since the reduced equation
+ * is first order and λ is a decay rate rather than a temporal frequency. A
+ * stack is the principled version of "drive these modes", so the mechanism
+ * survived and its target changed.
+ *
+ * Off at startup. A struck instrument's ground state has to be silence, or
+ * every note is heard against a drone and no decay resolves into anything.
+ */
+let sustaining = false;
+/** The stack currently being held, so a change can release the previous one. */
+let sustainedStack: HarmonicFamily | null = null;
+/** Modes being damped back down after release. */
+let releasing: number[] = [];
+
+/** Shortest family offered as a playable stack. */
+const MIN_HARMONICS = 2;
+
+/**
+ * Harmonic stacks. Sonifying every mode cannot produce pitch — the spectrum is
+ * denser than the ear's critical bands — so [ and ] solo one family at a time
+ * and K strikes it. See sim/families.ts.
+ *
+ * Two harmonics is enough to be a note: a fundamental with its octave is the
+ * purest tone here, not the thinnest. Rank governs how many stacks exist, since
+ * a family only extends as far as (np,nq) stays in the basis — 43 stacks at
+ * rank 256, 91 at 576, 159 at 1024 — while `maxHarmonics` governs how each one
+ * sounds, low for a flute and high for a reed.
+ */
+let families: HarmonicFamily[] = buildFamilies(sim.pairs, MIN_HARMONICS, config.maxHarmonics);
+let stackIndex = -1; // -1 = no solo, every mode sounds
+let stackMask: Float64Array | null = null;
+
+/** Underlay brightening while a stack is soloed, where the pattern is the subject. */
+const SOLO_VORT_GAIN = 4;
+
+
+let vorticity = new Float64Array(config.grid * config.grid);
 
 // Inject initial impulse
 sim.injectImpulse(config.grid / 2, config.grid / 2, 0, 1000);
@@ -39,9 +83,10 @@ const app = document.querySelector<HTMLDivElement>('#app')!;
 function createApp(): {
   canvas: HTMLCanvasElement;
   modeDisplay: HTMLDivElement;
+  stackDisplay: HTMLDivElement;
   strategyDisplay: HTMLDivElement;
-  modeTable: HTMLDivElement;
   configPanel: HTMLDivElement;
+  stackPicker: HTMLDivElement;
   fpsDisplay: HTMLSpanElement;
 } {
   const container = document.createElement('div');
@@ -61,9 +106,18 @@ function createApp(): {
   canvas.height = config.canvasSize;
   mainArea.appendChild(canvas);
 
+  const sidePanel = document.createElement('div');
+  sidePanel.id = 'side-panel';
+
   const configPanel = document.createElement('div');
   configPanel.id = 'config-panel';
-  mainArea.appendChild(configPanel);
+  sidePanel.appendChild(configPanel);
+
+  const stackPicker = document.createElement('div');
+  stackPicker.id = 'stack-picker';
+  sidePanel.appendChild(stackPicker);
+
+  mainArea.appendChild(sidePanel);
 
   container.appendChild(mainArea);
 
@@ -75,12 +129,17 @@ function createApp(): {
 
   const modeDisplay = document.createElement('div');
   modeDisplay.id = 'mode-display';
-  modeDisplay.textContent = 'Modes: 1';
+  modeDisplay.textContent = 'Sustain: off';
   statusRow.appendChild(modeDisplay);
+
+  const stackDisplay = document.createElement('div');
+  stackDisplay.id = 'stack-display';
+  stackDisplay.textContent = 'Stack: all modes';
+  statusRow.appendChild(stackDisplay);
 
   const strategyDisplay = document.createElement('div');
   strategyDisplay.id = 'strategy-display';
-  strategyDisplay.textContent = 'Audio: —';
+  strategyDisplay.textContent = 'Sound: —';
   statusRow.appendChild(strategyDisplay);
 
   const fpsDisplay = document.createElement('span');
@@ -91,20 +150,16 @@ function createApp(): {
 
   const instructions = document.createElement('div');
   instructions.id = 'instructions';
-  instructions.textContent = 'Drag to inject vorticity · 1-9 toggle modes · 0 clear modes · Space pause · S sound · A audio strategy · M pitch mapping · R reset · Enter fullscreen';
+  instructions.textContent = 'Click to strike · drag to bow · [ ] pick a stack · K strike it · H sustain · Space pause · S sound · R reset · Enter fullscreen';
   controls.appendChild(instructions);
-
-  const modeTable = document.createElement('div');
-  modeTable.id = 'mode-table';
-  controls.appendChild(modeTable);
 
   container.appendChild(controls);
   app.appendChild(container);
 
-  return { canvas, modeDisplay, strategyDisplay, modeTable, configPanel, fpsDisplay };
+  return { canvas, modeDisplay, stackDisplay, strategyDisplay, configPanel, stackPicker, fpsDisplay };
 }
 
-const { canvas, modeDisplay, strategyDisplay, modeTable, configPanel, fpsDisplay } = createApp();
+const { canvas, modeDisplay, stackDisplay, strategyDisplay, configPanel, stackPicker, fpsDisplay } = createApp();
 let renderer = new FluidRenderer(canvas);
 
 // --- Config panel ---
@@ -115,14 +170,20 @@ interface SliderDef {
   max: number;
   step: number;
   cold?: boolean; // requires sim rebuild
+  onChange?: () => void; // neither cold nor a hot sim field
   format?: (v: number) => string;
 }
 
 const sliders: SliderDef[] = [
-  { key: 'rank', label: 'Modes (rank)', min: 4, max: 256, step: 4, cold: true },
+  { key: 'rank', label: 'Modes (rank)', min: 4, max: 1024, step: 4, cold: true },
   { key: 'grid', label: 'Grid', min: 32, max: 256, step: 32, cold: true },
-  { key: 'viscosity', label: 'Viscosity', min: 0, max: 5, step: 0.1, format: v => v.toFixed(1) },
-  { key: 'force', label: 'Click force', min: 10, max: 1000, step: 10 },
+  // Viscosity by another name: it is the fluid's decay rate ν and the
+  // instrument's damper pedal at once, and players read the second one.
+  { key: 'viscosity', label: 'Damping', min: 0, max: 5, step: 0.1, format: v => v.toFixed(1) },
+  { key: 'strikeForce', label: 'Strike force', min: 50, max: 1000, step: 10 },
+  { key: 'hammerHardness', label: 'Hammer hardness', min: 0, max: 1, step: 0.05, format: v => v.toFixed(2) },
+  { key: 'strikePosition', label: 'Strike point', min: 0, max: 0.5, step: 0.01, format: v => (v === 0 ? 'centre' : `1/${(1 / v).toFixed(1)}`) },
+  { key: 'maxHarmonics', label: 'Harmonics per stack', min: 2, max: 24, step: 1, onChange: () => rebuildStacks() },
   { key: 'dt', label: 'Timestep', min: 0.00005, max: 0.0003, step: 0.00001, cold: true, format: v => v.toFixed(5) },
 ];
 
@@ -161,9 +222,10 @@ function buildConfigPanel(): void {
 
       if (def.cold) {
         rebuildSim();
+      } else if (def.onChange) {
+        def.onChange();
       } else {
-        // Hot update: apply immediately
-        sim.config.viscosity = config.viscosity;
+        applyHotConfig();
       }
     });
 
@@ -171,6 +233,18 @@ function buildConfigPanel(): void {
     row.appendChild(valueSpan);
     configPanel.appendChild(row);
   }
+}
+
+/**
+ * Push the hot (no-rebuild) settings through.
+ *
+ * Viscosity goes to two places. In the sim it is the decay rate ν·λ; in the
+ * sonifier it sets each partial's ring time 1/(ν·λ), which makes the same
+ * slider the instrument's damper pedal.
+ */
+function applyHotConfig(): void {
+  sim.config.viscosity = config.viscosity;
+  sonifier.setDamping(config.viscosity);
 }
 
 function rebuildSim(): void {
@@ -191,85 +265,236 @@ function rebuildSim(): void {
   sim.reconstruct();
   particles = new ParticleSystem(config.particleCount, config.grid, config.grid);
   dye = new DyeField(config.grid, config.grid);
-  forceTime = 0;
+  vorticity = new Float64Array(config.grid * config.grid);
+
+  // Both the stack list and the mask are indexed by rank, so neither survives.
+  families = buildFamilies(sim.pairs, MIN_HARMONICS, config.maxHarmonics);
+  selectStack(-1);
+  buildStackPicker();
 
   // Rebuild sonifier if audio was started
   if (audioStarted) {
-    sonifier = new Sonifier({ freqLow: 55, freqHigh: 4000, masterGain: 0.3 });
+    sonifier = new Sonifier({ masterGain: 0.3 });
+    // The fresh instance starts on its default damping, so hand it the current
+    // viscosity or the first notes after a rank change ring at the wrong length.
+    sonifier.setDamping(config.viscosity);
     audioStarted = false;
   }
 
-  buildModeTable();
 }
 
 buildConfigPanel();
 
+/**
+ * Strike force as a playing velocity in [0,1].
+ *
+ * Velocity is not just level: a hard blow compresses the felt, shortens the
+ * contact time and brightens the strike, so this number also moves the timbre.
+ */
+function strikeVelocity(): number {
+  const t = (config.strikeForce - 50) / 950;
+  return 0.2 + 0.8 * Math.min(1, Math.max(0, t));
+}
+
+/**
+ * Push the sustain gesture to the instrument.
+ *
+ * Event-driven, not polled: called when the gesture or the stack changes, so
+ * moving between stacks releases the held note and articulates the new one
+ * rather than layering them — which is what made sustaining feel like it was
+ * piling up.
+ */
+function applySustain(): void {
+  if (!audioStarted) return;
+  const held = sustaining && stackIndex >= 0 ? families[stackIndex] : null;
+  sonifier.sustain(
+    held ? strikeVector(sim.config.rank, held, config.strikePosition) : null,
+    held ? 1 : 0,
+    config.hammerHardness,
+  );
+}
+
+/** Status line for the sustain gesture. */
+function refreshSustainDisplay(): void {
+  modeDisplay.textContent = sustaining && stackIndex >= 0
+    ? `Sustain: ${families[stackIndex].label}`
+    : 'Sustain: off';
+}
+
+// --- Harmonic stacks ---
+
+/** Solo one stack, or pass -1 to hear and see the whole rank again. */
+function selectStack(index: number): void {
+  stackIndex = index;
+  stackMask = index < 0 ? null : familyMask(sim.config.rank, families[index]);
+  sonifier.setModeMask(stackMask);
+  applySustain();
+  refreshSustainDisplay();
+
+  if (index < 0) {
+    stackDisplay.textContent = 'Stack: all modes';
+  } else {
+    const fam = families[index];
+    const f0 = audioStarted ? ` · ${sonifier.getFrequency(fam.members[0]).toFixed(0)} Hz` : '';
+    stackDisplay.textContent =
+      `Stack: ${fam.label} · ${fam.members.length} harmonics${f0}`;
+  }
+  markActiveChip();
+}
+
+/**
+ * Cycle through [all modes, then every stack] in either direction.
+ *
+ * Walks `displayOrder` rather than `families`, so the keys move through the
+ * list in the order the picker is currently showing it — sorting by pitch turns
+ * [ and ] into a way to play up and down.
+ */
+function cycleStack(step: number): void {
+  const states = displayOrder.length + 1;
+  const pos = stackIndex < 0 ? -1 : displayOrder.indexOf(stackIndex);
+  const next = ((pos + 1 + step + states) % states) - 1;
+  selectStack(next < 0 ? -1 : displayOrder[next]);
+}
+
+// --- Stack picker ---
+
+type StackSort = 'rich' | 'pitch';
+
+const SORT_LABELS: Record<StackSort, string> = { rich: 'rich', pitch: 'pitch' };
+
+let stackSort: StackSort = 'rich';
+/** Indices into `families`, in the order the picker is showing them. */
+let displayOrder: number[] = [];
+/** Chip elements indexed by family index, for the active highlight. */
+let chipEls: HTMLElement[] = [];
+
+/**
+ * Recompute the display order.
+ *
+ * `families` itself stays richest-first — that order is what `stackIndex`
+ * means, so re-sorting it would invalidate a live selection and the mask built
+ * from it. Only this index list moves.
+ *
+ * Pitch order sorts on λ rather than on the mapped frequency: all three
+ * mappings are monotonic in λ, so one ordering is correct under all of them and
+ * survives a press of M. Ties are the transpose twins, which are degenerate in
+ * λ; they fall back to richest-first so a pair stays adjacent.
+ */
+function computeDisplayOrder(): void {
+  displayOrder = families.map((_, i) => i);
+  if (stackSort === 'pitch') {
+    displayOrder.sort((a, b) => {
+      const fa = families[a];
+      const fb = families[b];
+      return (fa.p * fa.p + fa.q * fa.q) - (fb.p * fb.p + fb.q * fb.q) || a - b;
+    });
+  }
+}
+
+/**
+ * Rebuild the stack list after a timbre change, holding the player on the same
+ * stack — it is the same note, played with more or fewer harmonics.
+ */
+function rebuildStacks(): void {
+  const current = stackIndex >= 0 ? families[stackIndex] : null;
+  families = buildFamilies(sim.pairs, MIN_HARMONICS, config.maxHarmonics);
+  const again = current
+    ? families.findIndex((f) => f.p === current.p && f.q === current.q)
+    : -1;
+  selectStack(again);
+  buildStackPicker();
+}
+
+function buildStackPicker(): void {
+  while (stackPicker.firstChild) stackPicker.removeChild(stackPicker.firstChild);
+  computeDisplayOrder();
+  chipEls = [];
+
+  const head = document.createElement('div');
+  head.className = 'panel-heading stack-picker-head';
+
+  const title = document.createElement('span');
+  title.textContent = `Stacks \u00b7 ${families.length}`;
+  head.appendChild(title);
+
+  const sort = document.createElement('div');
+  sort.className = 'stack-sort';
+  for (const mode of ['rich', 'pitch'] as StackSort[]) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = SORT_LABELS[mode];
+    if (stackSort === mode) btn.className = 'is-active';
+    btn.addEventListener('click', () => {
+      if (stackSort === mode) return;
+      stackSort = mode;
+      buildStackPicker();
+    });
+    sort.appendChild(btn);
+  }
+  head.appendChild(sort);
+  stackPicker.appendChild(head);
+
+  const chips = document.createElement('div');
+  chips.id = 'stack-chips';
+  for (const i of displayOrder) {
+    const fam = families[i];
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'stack-chip';
+
+    const name = document.createElement('span');
+    name.textContent = fam.label;
+
+    const meta = document.createElement('span');
+    meta.className = 'stack-chip-meta';
+    meta.textContent = audioStarted
+      ? `\u00d7${fam.members.length} \u00b7 ${sonifier.getFrequency(fam.members[0]).toFixed(0)} Hz`
+      : `\u00d7${fam.members.length}`;
+
+    chip.append(name, meta);
+    chip.addEventListener('click', () => selectStack(i));
+    chips.appendChild(chip);
+    chipEls[i] = chip;
+  }
+  stackPicker.appendChild(chips);
+  markActiveChip();
+}
+
+/** Move the highlight and keep the selected chip in view when [ ] scroll past it. */
+function markActiveChip(): void {
+  for (let i = 0; i < chipEls.length; i++) {
+    chipEls[i]?.classList.toggle('is-active', i === stackIndex);
+  }
+  if (stackIndex >= 0) chipEls[stackIndex]?.scrollIntoView({ block: 'nearest' });
+}
+
 // --- Mode table ---
-function buildModeTable(): void {
-  while (modeTable.firstChild) modeTable.removeChild(modeTable.firstChild);
 
-  const table = document.createElement('table');
-  const thead = document.createElement('thead');
-  const headerRow = document.createElement('tr');
-  for (const label of ['#', '(k\u2081,k\u2082)', '\u03BB', 'freq', 'w']) {
-    const th = document.createElement('th');
-    th.textContent = label;
-    headerRow.appendChild(th);
-  }
-  thead.appendChild(headerRow);
-  table.appendChild(thead);
-
-  const tbody = document.createElement('tbody');
-  const displayRank = sim.config.rank; // cap table rows
-  for (let k = 0; k < displayRank; k++) {
-    const { k1, k2 } = sim.pairs[k];
-    const lam = sim.eigenvalue(k);
-    const freq = audioStarted ? sonifier.getFrequency(k).toFixed(1) : '\u2014';
-
-    const tr = document.createElement('tr');
-    const cells = [
-      String(k),
-      `(${k1},${k2})`,
-      String(lam),
-      freq,
-      '0',
-    ];
-    for (let i = 0; i < cells.length; i++) {
-      const td = document.createElement('td');
-      td.textContent = cells[i];
-      if (i === 4) td.id = `w-${k}`;
-      tr.appendChild(td);
-    }
-    tbody.appendChild(tr);
-  }
-  table.appendChild(tbody);
-  modeTable.appendChild(table);
-}
-buildModeTable();
-
-function updateModeTable(): void {
-  const displayRank = sim.config.rank;
-  for (let k = 0; k < displayRank; k++) {
-    const el = document.getElementById(`w-${k}`);
-    if (el) el.textContent = sim.w[k].toFixed(4);
-  }
-}
+buildStackPicker();
 
 // --- Interaction ---
 function refreshAudioDisplay(): void {
-  strategyDisplay.textContent = audioStarted
-    ? `Audio: ${sonifier.strategyName} · ${sonifier.mappingLabel}`
-    : 'Audio: —';
+  if (!audioStarted) {
+    strategyDisplay.textContent = 'Sound: —';
+    return;
+  }
+  // Say when it is muted. Touching the canvas starts audio, so S is usually the
+  // *second* thing that reaches it and reads as "sound on" while actually
+  // suspending the context — which is silent in every sense, since a suspended
+  // context freezes currentTime and every scheduled strike waits on a clock
+  // that never arrives.
+  strategyDisplay.textContent = sonifier.isRunning ? 'Sound: on' : 'Sound: muted';
 }
 
 function ensureAudio(): void {
   if (!audioStarted) {
-    sonifier.onStrategyChange = () => refreshAudioDisplay();
-    sonifier.onMappingChange = () => refreshAudioDisplay();
     sonifier.init(sim);
     audioStarted = true;
-    buildModeTable();
     refreshAudioDisplay();
+    // Reapply the mask to the freshly-initialised sonifier and pick up the
+    // stack fundamentals, which have no frequency until audio exists.
+    selectStack(stackIndex);
+    buildStackPicker();
   }
 }
 
@@ -309,7 +534,7 @@ function canvasInject(e: MouseEvent): void {
     const dist = Math.sqrt(dgx * dgx + dgy * dgy);
     if (dist > 1e-6) {
       const speed = dist / dtSec;
-      const strength = Math.min(1, speed / POINTER_REF_SPEED) * config.force;
+      const strength = Math.min(1, speed / POINTER_REF_SPEED) * config.strikeForce;
       sim.injectImpulse(gx, gy, (dgx / dist) * strength, (dgy / dist) * strength);
       // step() reconstructs every frame; only paused injection needs it here.
       if (paused) sim.reconstruct();
@@ -320,12 +545,47 @@ function canvasInject(e: MouseEvent): void {
   dye.inject(gx, gy, 0.1, 0.4, 0.9, 4);
 }
 
+/** Scratch for reading the spectrum an impulse actually deposited. */
+let strikeSpectrum = new Float64Array(config.rank);
+
+/**
+ * Strike the fluid at a point, and play what the impulse actually excited.
+ *
+ * `injectImpulse` projects a point force onto the eigenbasis, and that
+ * projection *is* a spectrum — so a tap is already a strike, just an untuned
+ * one. Reading the change in w straight back out and handing it to the hammer
+ * makes the two ways of playing one gesture with two ways of aiming: hit a
+ * point and the geometry chooses the partials, broadband and inharmonic, a
+ * drumhead; hit a stack and one harmonic family sounds, a tuned bar. Neither
+ * spectrum is designed. Both are read off the same projection.
+ */
+function strikeAt(gx: number, gy: number, fx: number, fy: number): void {
+  const rank = sim.config.rank;
+  if (strikeSpectrum.length !== rank) strikeSpectrum = new Float64Array(rank);
+  for (let k = 0; k < rank; k++) strikeSpectrum[k] = sim.w[k];
+  sim.injectImpulse(gx, gy, fx, fy);
+  for (let k = 0; k < rank; k++) {
+    strikeSpectrum[k] = Math.abs(sim.w[k] - strikeSpectrum[k]);
+  }
+  sonifier.strike(strikeSpectrum, strikeVelocity(), config.hammerHardness);
+}
+
 let dragging = false;
 canvas.addEventListener('mousedown', (e) => {
   ensureAudio();
   dragging = true;
   lastPointer = null; // don't measure velocity across the gap between drags
-  canvasInject(e);
+
+  // A press is a tap. Its tangential direction is not something a player
+  // controls when tapping, so it is random — which also gives every tap its own
+  // colour, the way no two hammer strikes on a real body are identical.
+  const { gx, gy } = canvasPos(e);
+  const angle = Math.random() * Math.PI * 2;
+  strikeAt(gx, gy, Math.cos(angle) * config.strikeForce, Math.sin(angle) * config.strikeForce);
+  if (paused) sim.reconstruct();
+
+  lastPointer = { gx, gy, t: performance.now() };
+  dye.inject(gx, gy, 0.1, 0.4, 0.9, 4);
 });
 canvas.addEventListener('mousemove', (e) => {
   if (dragging) canvasInject(e);
@@ -340,30 +600,38 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     paused = !paused;
   } else if (e.key === 's' || e.key === 'S') {
-    ensureAudio();
-    sonifier.toggle();
-  } else if (e.key === 'a' || e.key === 'A') {
-    ensureAudio();
-    sonifier.nextStrategy();
-  } else if (e.key === 'm' || e.key === 'M') {
-    ensureAudio();
-    sonifier.nextMapping();
-    buildModeTable();
-  } else if (e.key >= '1' && e.key <= '9') {
-    const modeIdx = parseInt(e.key);
-    if (modeIdx < sim.config.rank) {
-      if (forcedModes.has(modeIdx)) {
-        forcedModes.delete(modeIdx);
-      } else {
-        forcedModes.add(modeIdx);
-      }
-      modeDisplay.textContent = forcedModes.size > 0
-        ? `Modes: ${[...forcedModes].sort().join(', ')}`
-        : 'Modes: none';
+    // First press starts audio; `init` already leaves it running, so toggling
+    // as well would suspend the context it had just opened — and every later
+    // strike would then be scheduled onto a clock that never advances.
+    if (audioStarted) sonifier.toggle();
+    else ensureAudio();
+    refreshAudioDisplay();
+  } else if (e.key === ']' || e.key === '[') {
+    cycleStack(e.key === ']' ? 1 : -1);
+  } else if (e.key === 'k' || e.key === 'K') {
+    // Play a note. The strike lands in two places at once, and it has to:
+    // the fluid gets the energy, so the mode pattern moves and the stack
+    // colours outward over the next seconds, while the sonifier gets the same
+    // spectrum as a sample-accurate audio event. Going only through w would
+    // cost the attack — w is read once per frame, so the earliest any gain
+    // derived from it can move is ~16 ms after the key, and a hammer is over
+    // in two. Everything that makes a strike sound struck lives in that gap.
+    if (stackIndex >= 0) {
+      ensureAudio();
+      const fam = families[stackIndex];
+      strikeFamily(sim.w, fam, config.strikeForce, config.strikePosition);
+      sim.reconstruct();
+      sonifier.strike(
+        strikeVector(sim.config.rank, fam, config.strikePosition),
+        strikeVelocity(),
+        config.hammerHardness,
+      );
     }
-  } else if (e.key === '0') {
-    forcedModes.clear();
-    modeDisplay.textContent = 'Modes: none';
+  } else if (e.key === 'h' || e.key === 'H') {
+    ensureAudio();
+    sustaining = !sustaining;
+    applySustain();
+    refreshSustainDisplay();
   } else if (e.key === 'r' || e.key === 'R') {
     sim.w.fill(0);
     // Off-centre and off-axis: injecting at the exact centre sits on a symmetry
@@ -372,7 +640,6 @@ document.addEventListener('keydown', (e) => {
     sim.reconstruct();
     particles.seed(config.grid, config.grid);
     dye.clear();
-    forceTime = 0;
   } else if (e.key === 'Enter') {
     if (!document.fullscreenElement) {
       document.documentElement.requestFullscreen();
@@ -386,37 +653,76 @@ document.addEventListener('keydown', (e) => {
 let frameCount = 0;
 let lastFpsTime = performance.now();
 
+/** Seconds for a sustained stack to reach its held amplitude. */
+const SUSTAIN_ATTACK = 0.18;
+
+/**
+ * Held amplitude in the fluid, as a multiple of what a single strike deposits.
+ *
+ * Back to 1 now that the held *tone* is synthesised rather than read off w.
+ * The fluid drive is only here to move the pattern and colour the held
+ * partials, so it no longer has to be loud — and at 3 it was pumping three
+ * strikes' worth of energy per stack into a cascade that takes tens of seconds
+ * to clear, which is most of why sustaining through a sequence of stacks piled
+ * up into a wash.
+ */
+const SUSTAIN_LEVEL = 1;
+/** Seconds for a released stack's modes to be damped back down. */
+const SUSTAIN_RELEASE = 0.3;
+
+let lastFrameMs = performance.now();
+
 // --- Main loop ---
 function frame(): void {
+  const nowMs = performance.now();
+  const frameSeconds = Math.min(0.1, Math.max(1e-3, (nowMs - lastFrameMs) / 1000));
+  lastFrameMs = nowMs;
+
   if (!paused) {
-    for (let i = 0; i < config.stepsPerFrame; i++) {
-      // Mode-selective forcing: directly drive w[k] for toggled modes
-      if (forcedModes.size > 0) {
-        forceTime += config.dt;
-        for (const k of forcedModes) {
-          const lam = sim.eigenvalue(k);
-          const phase = forceTime * Math.sqrt(lam) * 50;
-          sim.w[k] += Math.sin(phase) * config.forceStrength * 0.1;
-        }
+    // Sustain holds the stack at the amplitude a strike would have given it,
+    // replacing whatever the damping removes. The relaxation rate is a musical
+    // attack time in wall-clock seconds, deliberately *not* the viscous rate:
+    // sim time advances only 0.012 s per wall second here, so relaxing at ν·λ
+    // would take about a minute and a half to reach pitch. The steady state is
+    // the same either way; only the approach differs.
+    const held = sustaining && stackIndex >= 0 ? families[stackIndex] : null;
+
+    // Let go of what we were holding. Without this the previous stack keeps its
+    // full sustained amplitude, cascades outward, and every stack moved through
+    // adds another stack's worth of energy that takes tens of seconds to clear.
+    // A damper meeting the string is what the gesture already implies.
+    if (held !== sustainedStack) {
+      if (sustainedStack) releasing = sustainedStack.members.slice();
+      sustainedStack = held;
+    }
+    if (releasing.length > 0) {
+      const decay = Math.exp(-frameSeconds / SUSTAIN_RELEASE);
+      let alive = false;
+      for (const k of releasing) {
+        sim.w[k] *= decay;
+        if (Math.abs(sim.w[k]) > 1) alive = true;
       }
+      if (!alive) releasing = [];
+    }
+
+    if (held) {
+      const weights = strikeWeights(held, config.strikePosition);
+      const a = 1 - Math.exp(-frameSeconds / SUSTAIN_ATTACK);
+      held.members.forEach((k, n) => {
+        const target = config.strikeForce * SUSTAIN_LEVEL * weights[n];
+        sim.w[k] += (target - sim.w[k]) * a;
+      });
+    }
+
+    for (let i = 0; i < config.stepsPerFrame; i++) {
       sim.step();
     }
 
-    // Inject dye at forced mode antinodes
-    if (forcedModes.size > 0) {
-      for (const k of forcedModes) {
-        const { k1, k2 } = sim.pairs[k];
-        // Antinode is at the center of the first lobe: π/(2·k₁), π/(2·k₂)
-        const gx = (config.grid - 1) / (2 * k1);
-        const gy = (config.grid - 1) / (2 * k2);
-        // Color varies by mode index
-        const hue = k * 0.7;
-        dye.inject(gx, gy,
-          0.15 + 0.1 * Math.sin(hue),
-          0.1 + 0.1 * Math.sin(hue + 2),
-          0.15 + 0.1 * Math.sin(hue + 4),
-          3);
-      }
+    // Dye at the sustained stack's fundamental antinode: π/(2·k₁), π/(2·k₂).
+    if (held) {
+      const { k1, k2 } = sim.pairs[held.members[0]];
+      dye.inject((config.grid - 1) / (2 * k1), (config.grid - 1) / (2 * k2),
+        0.20, 0.12, 0.05, 3);
     }
 
     // Advect dye and particles once per frame
@@ -432,9 +738,9 @@ function frame(): void {
     sonifier.updateFromSim(sim);
   }
 
-  renderer.render(sim, dye);
+  sim.computeVorticity(vorticity, stackMask);
+  renderer.render(sim, dye, vorticity, stackMask ? SOLO_VORT_GAIN : 1);
   renderer.renderParticles(particles, config.grid, config.grid);
-  updateModeTable();
 
   // FPS
   frameCount++;

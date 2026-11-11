@@ -14,7 +14,7 @@ The `w` vector (eigenmode coefficients) is the universal state shared between si
 npm install           # Install dependencies
 npm run dev           # Dev server (Vite)
 npm run build         # Type check + production build
-npm test              # Run 25 tests (vitest)
+npm test              # Run 46 tests (vitest)
 npm run test:watch    # Watch mode tests
 ```
 
@@ -24,13 +24,14 @@ npm run test:watch    # Watch mode tests
 
 - `src/sim/basis.ts` — Eigenfunction basis construction, ij pair ordering, analytic structure tensor C
 - `src/sim/fluid.ts` — `FluidSim` class: simulation step loop, velocity reconstruction, impulse injection, `setCoefficients` (sound→fluid)
+- `src/sim/families.ts` — Harmonic mode families ("stacks"): the instrument's notes, plus strike weights
 - `src/sim/dye.ts` — Passive scalar (RGB dye) transport via semi-Lagrangian advection
 - `src/viz/renderer.ts` — Canvas 2D renderer: dye primary layer + vorticity underlay + particle overlay
-- `src/audio/sonifier.ts` — Web Audio strategy manager, frequency mapping, fluid↔sound bridge
-- `src/audio/strategy.ts` — `SonificationStrategy` interface
-- `src/audio/strategies/filterBank.ts` — Resonant filter bank: noise→high-Q bandpasses (Q 200–2000)
-- `src/audio/strategies/modalPercussion.ts` — Event-driven pings on mode energy spikes
-- `src/audio/strategies/harmonicSeries.ts` — Mode k → harmonic (k+1), w = spectral amplitudes
+- `src/audio/sonifier.ts` — The instrument's body: AudioContext, output chain, √λ frequency mapping, mode mask
+- `src/audio/strategy.ts` — `SonificationStrategy` interface (update / strike / setDrive / setDamping / resetLevel)
+- `src/audio/strategies/struckModal.ts` — The hammer: contact-time excitation, free-ringing detuned partial pairs
+- `src/audio/strategies/filterBank.ts` — The bow: noise into resonators, pressure from stirring or an asserted drive
+- `src/audio/amplitude.ts` — Shared L1 shape + peak-referenced loudness
 - `src/main.ts` — App shell, DOM setup, interaction handlers, main loop
 
 ### Key Concepts
@@ -39,9 +40,26 @@ npm run test:watch    # Watch mode tests
 
 **Structure tensor C**: Precomputed rank³ tensor encoding nonlinear mode interactions. Uses analytic coefficients from trig product-to-sum identities (`structureCoefficientAnalytic`). Sparse due to selection rules.
 
-**Frequency mapping**: Log-log mapping from eigenvalue range [λ_min, λ_max] to frequency range [freqLow, freqHigh] (default 55–4000 Hz, ~6 octaves). Perceptually uniform spacing across the keyboard. Configurable via `SonifierConfig.freqLow`/`freqHigh`.
+**Frequency mapping**: `f = base·√(λ/λmin)` — the physical modal relation, and the only
+mapping the instrument is true under. Because `λ(np,nq) = n²λ(p,q)`, every family (p,q)
+lands on an exact harmonic series. Two alternative mappings (λ-linear, log-log) were
+removed: both falsified the note, the log-log fit rendering an exact octave as 3158 cents.
 
-**Mode-selective forcing**: Number keys 1–9 toggle direct w[k] coefficient driving (Chladni-inspired). Each forced mode is pumped sinusoidally at its natural frequency. Dye is injected at mode antinodes for visual feedback.
+**The instrument, and its three gestures**: the hammer and the bow are both live at all
+times — there is no strategy switch. A **strike** (click, or `K`) is an impulsive event
+scheduled directly on the audio clock, because `w` is sampled once per frame and a hammer
+is over in 2 ms. A **stir** (drag) bows the resonators, with pressure inferred from the L1
+rate of change of `w`. A **sustain** (`H`) holds the selected stack against the damping,
+asserting bow pressure directly via `setDrive` because a held stack barely moves `w`.
+
+**Two ways of aiming one hammer**: `injectImpulse` projects a point force onto the
+eigenbasis, and that projection *is* a spectrum. Striking a point plays whatever the
+geometry excites there (broadband, inharmonic, a drumhead); striking a stack plays one
+harmonic family (pitched, a tuned bar). Neither spectrum is designed; both are read off
+the same projection.
+
+**Damping is the damper pedal**: viscosity sets the fluid's decay rate ν·λ and each
+partial's ring time 1/(ν·λ) at once. The UI calls it Damping.
 
 ### Data Layout
 
@@ -51,13 +69,14 @@ npm run test:watch    # Watch mode tests
 
 ## Testing
 
-25 tests in `src/sim/basis.test.ts` and `src/sim/fluid.test.ts` covering:
+46 tests in `src/sim/basis.test.ts`, `src/sim/fluid.test.ts` and `src/sim/families.test.ts` covering:
 - ij pair ordering and round-trip
 - Eigenfunction boundary conditions, divergence-free property, orthogonality
 - Structure tensor sparsity, self-interaction symmetry, slab extraction
 - Energy conservation (inviscid), energy decay (viscous)
 - Impulse injection, coefficient setting, velocity reconstruction
 - Nontrivial dynamics (w evolves under advection)
+- Harmonic family enumeration, mode masks, strike weights and the hammer's strike-point notch
 
 Run a single test file: `npx vitest run src/sim/basis.test.ts`
 

@@ -95,6 +95,9 @@ export class FluidSim {
   private gu: Float64Array;
   private gv: Float64Array;
 
+  /** Vorticity workspace: per-k₁-group partial sums over y. */
+  private gw: Float64Array;
+
   /** CFL-like diagnostic: dt * max|wDot[k]| / max|w[k]|. Should stay < ~0.5. */
   cfl = 0;
 
@@ -118,6 +121,7 @@ export class FluidSim {
     this.velocity = new Float64Array(2 * xRes * yRes);
     this.gu = new Float64Array((this.separable.maxK + 1) * yRes);
     this.gv = new Float64Array((this.separable.maxK + 1) * yRes);
+    this.gw = new Float64Array((this.separable.maxK + 1) * yRes);
 
     this.invLambda = new Float64Array(rank);
     for (let k = 0; k < rank; k++) {
@@ -278,6 +282,58 @@ export class FluidSim {
         for (let ix = 0; ix < xRes; ix++) {
           v[row + ix] += sinX[xOff + ix] * guv;
           v[fieldSize + row + ix] -= cosX[xOff + ix] * gvv;
+        }
+      }
+    }
+  }
+
+  /**
+   * Write the vorticity field ω = ∑_k w_k sin(k₁x) sin(k₂y) into `out`
+   * (length xRes·yRes).
+   *
+   * The basis defines vorticity in closed form — it is the eigenfunction's
+   * defining shape, and velocity is its curl — so there is no reason to
+   * finite-difference the reconstructed velocity for it. Same separable
+   * factorisation as reconstruct(): collapse each k₁ group over y, then sweep x
+   * once per distinct k₁.
+   *
+   * `mask` scales each mode on the way in. Passing a harmonic family's mask
+   * draws that stack's standing pattern alone, so the image shows exactly the
+   * subspace the ear is being given.
+   */
+  computeVorticity(out: Float64Array, mask?: Float64Array | null): void {
+    const { xRes, yRes } = this.config;
+    const { maxK, sinX, sinY, groupStart, groupModes } = this.separable;
+    const w = this.w;
+    const g = this.gw;
+
+    // Pass 1: collapse each k₁ group over y. O(rank * yRes).
+    g.fill(0);
+    for (let k1 = 1; k1 <= maxK; k1++) {
+      const base = k1 * yRes;
+      for (let gi = groupStart[k1]; gi < groupStart[k1 + 1]; gi++) {
+        const m = groupModes[gi];
+        const wm = mask ? w[m] * mask[m] : w[m];
+        if (wm === 0) continue;
+        const yOff = this.pairs[m].k2 * yRes;
+        for (let iy = 0; iy < yRes; iy++) {
+          g[base + iy] += wm * sinY[yOff + iy];
+        }
+      }
+    }
+
+    // Pass 2: sweep x once per k₁. O(maxK * xRes * yRes).
+    out.fill(0);
+    for (let k1 = 1; k1 <= maxK; k1++) {
+      if (groupStart[k1] === groupStart[k1 + 1]) continue;
+      const base = k1 * yRes;
+      const xOff = k1 * xRes;
+      for (let iy = 0; iy < yRes; iy++) {
+        const gv = g[base + iy];
+        if (gv === 0) continue;
+        const row = iy * xRes;
+        for (let ix = 0; ix < xRes; ix++) {
+          out[row + ix] += sinX[xOff + ix] * gv;
         }
       }
     }

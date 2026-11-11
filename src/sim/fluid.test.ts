@@ -129,3 +129,93 @@ describe('FluidSim', () => {
     expect(Math.abs(v2)).toBeGreaterThan(0.01);
   });
 });
+
+describe('computeVorticity', () => {
+  /** Direct O(rank·N) evaluation of omega = sum_k w_k sin(k1 x) sin(k2 y). */
+  function referenceVorticity(sim: FluidSim, mask?: Float64Array): Float64Array {
+    const { xRes, yRes } = sim.config;
+    const dx = Math.PI / (xRes - 1);
+    const dy = Math.PI / (yRes - 1);
+    const out = new Float64Array(xRes * yRes);
+    for (let k = 0; k < sim.config.rank; k++) {
+      const wk = mask ? sim.w[k] * mask[k] : sim.w[k];
+      if (wk === 0) continue;
+      const { k1, k2 } = sim.pairs[k];
+      for (let iy = 0; iy < yRes; iy++) {
+        const sy = Math.sin(k2 * iy * dy);
+        for (let ix = 0; ix < xRes; ix++) {
+          out[iy * xRes + ix] += wk * Math.sin(k1 * ix * dx) * sy;
+        }
+      }
+    }
+    return out;
+  }
+
+  it('matches a direct evaluation of the eigenfunction sum', () => {
+    const sim = new FluidSim({ rank: 64, xRes: 32, yRes: 32 });
+    sim.injectImpulse(13, 9, 380, 1000);
+
+    const out = new Float64Array(32 * 32);
+    sim.computeVorticity(out);
+    const ref = referenceVorticity(sim);
+
+    let maxDiff = 0;
+    let scale = 0;
+    for (let i = 0; i < out.length; i++) {
+      maxDiff = Math.max(maxDiff, Math.abs(out[i] - ref[i]));
+      scale = Math.max(scale, Math.abs(ref[i]));
+    }
+    expect(maxDiff / scale).toBeLessThan(1e-12);
+  });
+
+  it('a mask keeps exactly the masked modes and drops the rest', () => {
+    const sim = new FluidSim({ rank: 64, xRes: 32, yRes: 32 });
+    sim.injectImpulse(13, 9, 380, 1000);
+
+    const mask = new Float64Array(64);
+    mask[0] = 1;
+    mask[5] = 1;
+
+    const out = new Float64Array(32 * 32);
+    sim.computeVorticity(out, mask);
+    const ref = referenceVorticity(sim, mask);
+
+    let maxDiff = 0;
+    let scale = 0;
+    for (let i = 0; i < out.length; i++) {
+      maxDiff = Math.max(maxDiff, Math.abs(out[i] - ref[i]));
+      scale = Math.max(scale, Math.abs(ref[i]));
+    }
+    expect(scale).toBeGreaterThan(0);
+    expect(maxDiff / scale).toBeLessThan(1e-12);
+  });
+
+  it('vanishes on the boundary, as the Dirichlet condition requires', () => {
+    const sim = new FluidSim({ rank: 32, xRes: 24, yRes: 24 });
+    sim.injectImpulse(11, 7, 380, 1000);
+
+    const out = new Float64Array(24 * 24);
+    sim.computeVorticity(out);
+
+    for (let i = 0; i < 24; i++) {
+      expect(Math.abs(out[i])).toBeLessThan(1e-12);                 // y = 0
+      expect(Math.abs(out[23 * 24 + i])).toBeLessThan(1e-12);       // y = pi
+      expect(Math.abs(out[i * 24])).toBeLessThan(1e-12);            // x = 0
+      expect(Math.abs(out[i * 24 + 23])).toBeLessThan(1e-12);       // x = pi
+    }
+  });
+
+  it('does not disturb the reconstruction workspace', () => {
+    const sim = new FluidSim({ rank: 64, xRes: 32, yRes: 32 });
+    sim.injectImpulse(13, 9, 380, 1000);
+    sim.reconstruct();
+    const before = Float64Array.from(sim.velocity);
+
+    sim.computeVorticity(new Float64Array(32 * 32));
+    sim.reconstruct();
+
+    for (let i = 0; i < before.length; i++) {
+      expect(sim.velocity[i]).toBe(before[i]);
+    }
+  });
+});

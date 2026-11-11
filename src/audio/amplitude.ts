@@ -48,23 +48,50 @@ export class PeakTracker {
     this.peak = 0;
     this.lastTime = 0;
   }
+
+  /**
+   * Scale the reference, for when the measured quantity changes units.
+   *
+   * Resetting is almost never what you want: the next value seen becomes the
+   * new peak and therefore reads as full scale, however small it is. Rescaling
+   * keeps the reported level continuous across the change instead.
+   */
+  rescale(factor: number): void {
+    if (Number.isFinite(factor) && factor > 0) this.peak *= factor;
+  }
 }
+
+/** Below this, a gain change is inaudible and not worth an automation event. */
+const SEND_EPSILON = 1e-5;
 
 /** Per-mode amplitudes: L1-normalised shape scaled by absolute loudness. */
 export class ModeAmplitudes {
   readonly amps: Float64Array;
   private prev: Float64Array;
+  private sent: Float64Array;
   private tracker = new PeakTracker();
+  private lastL1 = 0;
+  private reseed = false;
 
   constructor(rank: number) {
     this.amps = new Float64Array(rank);
     this.prev = new Float64Array(rank);
+    this.sent = new Float64Array(rank);
   }
 
   /** Recompute `amps` from w. Returns the loudness in [0,1]. */
   update(w: Float64Array, rank: number, now: number, scale = 1): number {
     let l1 = 0;
     for (let k = 0; k < rank; k++) l1 += Math.abs(w[k]);
+
+    // The set of sounding modes just changed, so the reference is measuring a
+    // norm that no longer exists. Scale it by however much the norm moved,
+    // which keeps the level continuous across the change.
+    if (this.reseed) {
+      this.reseed = false;
+      if (this.lastL1 > 1e-12 && l1 > 1e-12) this.tracker.rescale(l1 / this.lastL1);
+    }
+    this.lastL1 = l1;
 
     const loudness = this.tracker.update(l1, now);
     const norm = l1 > 1e-12 ? 1 / l1 : 0;
@@ -74,10 +101,46 @@ export class ModeAmplitudes {
     return loudness;
   }
 
+  /**
+   * Re-reference the level, because the set of sounding modes just changed.
+   *
+   * Soloing an eight-mode stack out of 576 cuts the L1 norm by a large factor
+   * against a reference set while everything was sounding, so every level
+   * afterwards reads as near-zero — the bank goes quiet for a minute and a half
+   * exactly when the player asks to hear one note. The cure is not to *forget*
+   * the reference, which makes the next value read as full scale and arrives as
+   * a crash; it is to rescale it on the next frame by however much the norm
+   * actually moved.
+   *
+   * `sent` is filled with Infinity rather than zero so every gain is rewritten
+   * once. Zero would compare equal to the new amplitude of a mode the mask has
+   * just switched off, and that mode's gain would be left open.
+   */
+  resetLevel(): void {
+    this.reseed = true;
+    this.prev.fill(0);
+    this.sent.fill(Infinity);
+  }
+
   /** ATTACK_TC while this mode is rising, RELEASE_TC while it falls. */
   timeConstant(k: number): number {
     const tc = this.amps[k] > this.prev[k] ? ATTACK_TC : RELEASE_TC;
     this.prev[k] = this.amps[k];
     return tc;
+  }
+
+  /**
+   * Whether mode k's gain has moved enough to be worth an automation event.
+   *
+   * At rank 576 a strategy that writes every mode every frame issues ~34,500
+   * `setTargetAtTime` calls a second, and when a stack is soloed all but eight
+   * of them are scheduling a ramp from zero to zero. Skipping those is free
+   * headroom for the rank slider, which is the parameter that decides how many
+   * notes the instrument has.
+   */
+  needsUpdate(k: number): boolean {
+    if (Math.abs(this.amps[k] - this.sent[k]) < SEND_EPSILON) return false;
+    this.sent[k] = this.amps[k];
+    return true;
   }
 }

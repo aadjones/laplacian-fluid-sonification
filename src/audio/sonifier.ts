@@ -1,237 +1,234 @@
 /**
- * Sonifier: thin shell that owns the AudioContext and delegates to a
- * swappable SonificationStrategy. Press a key to cycle strategies at runtime.
+ * Sonifier: the instrument's body.
  *
- * Strategies only receive w, frequencies, and eigenvalues—not FluidSim
- * directly—so they work with any sim backend.
+ * It owns the AudioContext, the output chain, and the set of excitations that
+ * share it. Strategies receive only w, frequencies and eigenvalues — never
+ * FluidSim — so they work with any sim backend.
+ *
+ * There used to be five strategies and a key to cycle between them. That was
+ * A/B scaffolding from before the comparison had been made, and it had a real
+ * cost: a physical instrument does not switch between "hammer mode" and "bow
+ * mode", it has both at once, and making them exclusive meant the bow vanished
+ * the moment you started striking. The two that survived now run together and
+ * always have. What was a mode switch is now just two mechanisms sharing a
+ * resonating body, which is what they always were.
  */
 
 import type { FluidSim } from '../sim/fluid';
 import type { SonificationStrategy, ModePair } from './strategy';
+import { StruckModalStrategy } from './strategies/struckModal';
 import { FilterBankStrategy } from './strategies/filterBank';
-import { ModalPercussionStrategy } from './strategies/modalPercussion';
-import { HarmonicSeriesStrategy } from './strategies/harmonicSeries';
-import { SpectralEnvelopeStrategy } from './strategies/spectralEnvelope';
-
-/** How eigenvalues become audio frequencies. See computeFrequencies. */
-export type FreqMapping = 'sqrt' | 'linear' | 'stretched';
 
 export interface SonifierConfig {
-  freqLow: number;
-  freqHigh: number;
-  /** Pitch the lowest mode lands on, for the 'sqrt' and 'linear' mappings. */
+  /** Pitch the lowest mode lands on. */
   freqBase: number;
-  mapping: FreqMapping;
   masterGain: number;
 }
 
 const DEFAULT_CONFIG: SonifierConfig = {
-  freqLow: 55,
-  freqHigh: 4000,
   freqBase: 110,
-  mapping: 'sqrt',
   masterGain: 0.3,
 };
 
-/** Cycling order for the M key. */
-export const MAPPING_ORDER: FreqMapping[] = ['sqrt', 'linear', 'stretched'];
-
-export const MAPPING_LABELS: Record<FreqMapping, string> = {
-  sqrt: '√λ bell',
-  linear: 'λ harmonic',
-  stretched: 'log-log',
-};
-
 /**
- * Map eigenvalues to audio frequencies.
+ * Map eigenvalues to audio frequencies: f = base·√(λ/λmin).
  *
- * 'sqrt'      f = base·√(λ/λmin) — the physical modal relation. Because
- *             λ(np,nq) = n²λ(p,q), every family (p,q) lands on an EXACT harmonic
- *             series. Rank 32 carries four overlapping series on mutually
- *             inharmonic fundamentals: the internal structure of a struck bell.
- *             Narrowest spread (2.35 octaves at rank 32).
+ * This is the physical modal relation, and it is the only mapping the rest of
+ * the instrument is true under. Because λ(np,nq) = n²λ(p,q), every family (p,q)
+ * lands on an exact harmonic series, which is what makes a mode stack fuse into
+ * a note — see sim/families.ts.
  *
- * 'linear'    f = (base/λmin)·λ. λ = k₁²+k₂² is always an integer, so every
- *             mode is an exact harmonic of a single fundamental — maximum
- *             fusion, one composite tone. Within a family the partials run
- *             1,4,9,16 rather than 1,2,3,4. Wider spread (4.70 octaves).
- *
- * 'stretched' The original log-log fit onto [freqLow, freqHigh]. Lands in the
- *             target range but is a hidden power law f ∝ λ^1.316, which destroys
- *             every integer ratio above — an exact octave renders as 3158 cents.
- *             Kept as the A/B baseline.
+ * Two other mappings used to sit on a cycling key, and both falsified that.
+ * `linear` (f ∝ λ) made a family's partials run 1,4,9,16 instead of 1,2,3,4;
+ * the original log-log fit was a hidden power law f ∝ λ^1.316 that rendered an
+ * exact octave as 3158 cents. An instrument does not need a control that
+ * detunes it.
  */
-export function computeFrequencies(eigenvalues: number[], config: SonifierConfig): number[] {
+export function computeFrequencies(eigenvalues: number[], freqBase: number): number[] {
   // buildIjPairs enumerates by max(k1,k2), not by λ, so eigenvalues is NOT
-  // sorted (rank 32 runs ... 18, 17, 17 ...). Taking [0]/[rank-1] as the range
-  // understates λmax at 30 of the ranks 4..64 — at rank 20 it maps the top mode
-  // to 4684 Hz, past the 4000 Hz ceiling.
+  // sorted (rank 32 runs ... 18, 17, 17 ...). Taking [0] as λmin is wrong at
+  // most ranks.
   const lamMin = Math.min(...eigenvalues);
-  const lamMax = Math.max(...eigenvalues);
-  const { freqLow, freqHigh, freqBase, mapping } = config;
-
-  if (mapping === 'sqrt') {
-    return eigenvalues.map((lam) => freqBase * Math.sqrt(lam / lamMin));
-  }
-  if (mapping === 'linear') {
-    return eigenvalues.map((lam) => (freqBase / lamMin) * lam);
-  }
-  const logLamRange = Math.log(lamMax) - Math.log(lamMin);
-  return eigenvalues.map((lam) => {
-    const t = logLamRange > 0 ? (Math.log(lam) - Math.log(lamMin)) / logLamRange : 0;
-    return freqLow * Math.pow(freqHigh / freqLow, t);
-  });
+  return eigenvalues.map((lam) => freqBase * Math.sqrt(lam / lamMin));
 }
 
-/** Strategy factory functions, in cycling order */
-const STRATEGY_FACTORIES: (() => SonificationStrategy)[] = [
+/** The excitations that make up the instrument. Both are live at all times. */
+const EXCITATIONS: (() => SonificationStrategy)[] = [
+  () => new StruckModalStrategy(),
   () => new FilterBankStrategy(),
-  () => new ModalPercussionStrategy(),
-  () => new HarmonicSeriesStrategy(),
-  () => new SpectralEnvelopeStrategy(),
 ];
 
 export class Sonifier {
   private ctx: AudioContext | null = null;
   private masterGainNode: GainNode | null = null;
+  private limiter: WaveShaperNode | null = null;
+  private outputGain: GainNode | null = null;
   private config: SonifierConfig;
   private frequencies: number[] = [];
   private eigenvalues: number[] = [];
   private pairs: ModePair[] = [];
   private running = false;
 
-  private activeIndex = 0;
-  private activeStrategy: SonificationStrategy | null = null;
-  /** Per-strategy gain node so we can hard-cut output on dispose */
-  private strategyGain: GainNode | null = null;
+  /**
+   * Output-side mode mask; null means every mode sounds. See sim/families.ts
+   * for why sonifying the whole rank cannot produce pitch at rank 576.
+   */
+  private modeMask: Float64Array | null = null;
+  private maskedW = new Float64Array(0);
+  private maskedStrike = new Float64Array(0);
 
-  /** Callback fired when strategy changes (for UI updates) */
-  onStrategyChange: ((name: string) => void) | null = null;
-  /** Callback fired when the frequency mapping changes (for UI updates) */
-  onMappingChange: ((label: string) => void) | null = null;
+  private strategies: SonificationStrategy[] = [];
+  /** Last viscosity seen, re-applied whenever the excitations are built. */
+  private damping = 0.5;
 
   constructor(config: Partial<SonifierConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
   }
 
   /**
-   * Initialize audio context and activate the first strategy.
+   * Initialize audio and build the excitations.
    * Must be called from a user gesture.
    */
   init(sim: FluidSim): void {
     if (this.ctx) return;
 
     this.ctx = new AudioContext();
+    // Chromium hands back a suspended context unless it is convinced the call
+    // came from a user gesture, and it is not always convinced. Ask explicitly:
+    // a suspended context freezes currentTime, so scheduled strikes are written
+    // into a clock that never reaches them and the instrument is silent.
+    void this.ctx.resume();
+
     this.masterGainNode = this.ctx.createGain();
     this.masterGainNode.gain.value = this.config.masterGain;
-    this.masterGainNode.connect(this.ctx.destination);
+
+    // Soft ceiling, last in the chain.
+    //
+    // Strikes are additive on purpose — playing a second stack over a ringing
+    // first one is the instrument's whole polyphony model — so the summed
+    // output is unbounded by construction. Left alone it would hit the
+    // destination's hard clip, which on a percussive transient is the ugliest
+    // sound a digital instrument can make. tanh is near-linear below about a
+    // third of full scale, so a single note passes through untouched and only
+    // a chord meets the curve. A compressor would work too, but its fast attack
+    // would flatten exactly the transient the hammer exists to produce; a
+    // memoryless saturator has no attack to get wrong, and a little harmonic
+    // distortion as an instrument is driven hard is what a body does anyway.
+    //
+    // It goes *after* the master fader, not before. Ahead of a 0.3 fader its
+    // own 0.76 ceiling becomes the real ceiling and caps the instrument about
+    // 13 dB below full scale however hard it is struck.
+    this.limiter = this.ctx.createWaveShaper();
+    const curve = new Float32Array(2048);
+    for (let i = 0; i < curve.length; i++) {
+      curve[i] = Math.tanh((i / (curve.length - 1)) * 2 - 1);
+    }
+    this.limiter.curve = curve;
+    this.limiter.oversample = '2x';
+
+    this.masterGainNode.connect(this.limiter);
+    this.limiter.connect(this.ctx.destination);
 
     const rank = sim.config.rank;
     this.eigenvalues = [];
-
-    // Collect eigenvalues and mode pairs
+    this.pairs = [];
     for (let k = 0; k < rank; k++) {
       this.eigenvalues.push(sim.eigenvalue(k));
       this.pairs.push({ k1: sim.pairs[k].k1, k2: sim.pairs[k].k2 });
     }
-    this.frequencies = computeFrequencies(this.eigenvalues, this.config);
+    this.frequencies = computeFrequencies(this.eigenvalues, this.config.freqBase);
+    this.maskedW = new Float64Array(rank);
+    this.maskedStrike = new Float64Array(rank);
 
-    this.activeIndex = 0;
-    this.activateStrategy(0);
+    // One shared gain for every excitation, so they sum into the same body.
+    this.outputGain = this.ctx.createGain();
+    this.outputGain.gain.value = 1;
+    this.outputGain.connect(this.masterGainNode);
+
+    this.strategies = EXCITATIONS.map((make) => {
+      const s = make();
+      s.setDamping?.(this.damping);
+      s.init(this.ctx!, this.outputGain!, this.frequencies, this.eigenvalues, this.pairs);
+      return s;
+    });
+
     this.running = true;
   }
 
-  private activateStrategy(index: number): void {
-    if (!this.ctx || !this.masterGainNode) return;
-
-    // Hard-cut previous strategy: dispose it, then disconnect its gain node
-    // so any lingering audio (in-flight pings, automation tails) is silenced
-    if (this.activeStrategy) {
-      this.activeStrategy.dispose();
-    }
-    if (this.strategyGain) {
-      this.strategyGain.gain.setValueAtTime(0, this.ctx.currentTime);
-      this.strategyGain.disconnect();
-      this.strategyGain = null;
-    }
-
-    // Fresh instance + isolated gain node
-    this.activeIndex = index;
-    this.strategyGain = this.ctx.createGain();
-    this.strategyGain.gain.value = 1;
-    this.strategyGain.connect(this.masterGainNode);
-
-    this.activeStrategy = STRATEGY_FACTORIES[index]();
-    this.activeStrategy.init(this.ctx, this.strategyGain, this.frequencies, this.eigenvalues, this.pairs);
-    this.onStrategyChange?.(this.activeStrategy.name);
-  }
-
-  /** Cycle to the next strategy */
-  nextStrategy(): void {
-    const count = STRATEGY_FACTORIES.length;
-    this.activateStrategy((this.activeIndex + 1) % count);
+  /**
+   * Restrict which modes sound, or pass null to sound all of them.
+   *
+   * The mask multiplies w on its way to the excitations rather than living
+   * inside one, so all of them inherit it unchanged. It lands before the L1/L2
+   * normalisation, which is the point: soloing an eight-mode stack gives those
+   * eight modes the entire level instead of 8/576 of it, so isolation makes the
+   * stack louder as well as clearer.
+   */
+  setModeMask(mask: Float64Array | null): void {
+    this.modeMask = mask;
+    // The set of sounding modes just changed, so any running loudness
+    // reference is now measuring against a norm that no longer exists.
+    for (const s of this.strategies) s.resetLevel?.();
   }
 
   /**
-   * Cycle the eigenvalue→frequency mapping. Strategies cache frequencies at
-   * init(), so the active one is rebuilt to pick up the new set.
+   * Play a note: an out-of-band, sample-accurate excitation event.
+   *
+   * This is the half of the instrument `w` cannot carry. `w` is sampled once
+   * per animation frame, so a gain derived from it cannot move until ~16 ms
+   * after the gesture, and a hammer's identity is over in 2 ms.
+   *
+   * Strikes are additive by design: striking while something is still ringing
+   * superposes in the resonators, so voice overlap is physical rather than an
+   * allocation policy. The mask applies here too, so soloing a stack aims the
+   * hammer as well as filtering what is heard.
    */
-  nextMapping(): void {
-    const i = MAPPING_ORDER.indexOf(this.config.mapping);
-    this.config.mapping = MAPPING_ORDER[(i + 1) % MAPPING_ORDER.length];
-    this.frequencies = computeFrequencies(this.eigenvalues, this.config);
-    this.onMappingChange?.(this.mappingLabel);
-    if (this.ctx) this.activateStrategy(this.activeIndex);
+  strike(weights: Float64Array, velocity = 0.8, hardness = 0.5): void {
+    if (!this.running) return;
+    let w = weights;
+    if (this.modeMask) {
+      const n = Math.min(weights.length, this.maskedStrike.length);
+      for (let k = 0; k < n; k++) this.maskedStrike[k] = weights[k] * this.modeMask[k];
+      w = this.maskedStrike;
+    }
+    for (const s of this.strategies) s.strike?.(w, velocity, hardness);
   }
 
-  /** Human-readable label for the active frequency mapping */
-  get mappingLabel(): string {
-    return MAPPING_LABELS[this.config.mapping];
+  /**
+   * Hold the given modes as a sustained tone, or release with a `level` of 0.
+   *
+   * Masked like `strike`, so soloing aims the sustain as well as the hammer.
+   */
+  sustain(weights: Float64Array | null, level: number, hardness = 0.5): void {
+    if (!weights || level <= 0) {
+      for (const s of this.strategies) s.sustain?.(null, 0, hardness);
+      return;
+    }
+    let w = weights;
+    if (this.modeMask) {
+      const n = Math.min(weights.length, this.maskedStrike.length);
+      for (let k = 0; k < n; k++) this.maskedStrike[k] = weights[k] * this.modeMask[k];
+      w = this.maskedStrike;
+    }
+    for (const s of this.strategies) s.sustain?.(w, level, hardness);
   }
 
-  /** Cycle to the previous strategy */
-  prevStrategy(): void {
-    const count = STRATEGY_FACTORIES.length;
-    this.activateStrategy((this.activeIndex - 1 + count) % count);
+  /** Forward the damping slider to excitations that ring on their own. */
+  setDamping(viscosity: number): void {
+    this.damping = viscosity;
+    for (const s of this.strategies) s.setDamping?.(viscosity);
   }
 
-  /** Get the active strategy's name */
-  get strategyName(): string {
-    return this.activeStrategy?.name ?? 'None';
-  }
-
-  /** Get all strategy names */
-  get strategyNames(): string[] {
-    return STRATEGY_FACTORIES.map(f => f().name);
-  }
-
-  /** Update from sim state — delegates to active strategy */
+  /** Update from sim state — every excitation sees the same masked w. */
   updateFromSim(sim: FluidSim): void {
-    if (!this.running || !this.activeStrategy) return;
-    this.activeStrategy.update(sim.w, sim.config.rank);
-  }
-
-  /**
-   * Sound→Fluid direction: generate w coefficients from frequency/amplitude pairs.
-   */
-  frequenciesToCoefficients(
-    freqAmps: Array<{ freq: number; amp: number }>,
-    rank: number,
-  ): Float64Array {
-    const w = new Float64Array(rank);
-    for (const { freq, amp } of freqAmps) {
-      let bestK = 0;
-      let bestDist = Infinity;
-      for (let k = 0; k < this.frequencies.length; k++) {
-        const dist = Math.abs(this.frequencies[k] - freq);
-        if (dist < bestDist) {
-          bestDist = dist;
-          bestK = k;
-        }
-      }
-      w[bestK] += amp;
+    if (!this.running || this.strategies.length === 0) return;
+    const rank = sim.config.rank;
+    let w = sim.w;
+    if (this.modeMask) {
+      for (let k = 0; k < rank; k++) this.maskedW[k] = sim.w[k] * this.modeMask[k];
+      w = this.maskedW;
     }
-    return w;
+    for (const s of this.strategies) s.update(w, rank);
   }
 
   getFrequency(k: number): number {
@@ -239,8 +236,8 @@ export class Sonifier {
   }
 
   setMasterGain(value: number): void {
-    if (this.masterGainNode) {
-      this.masterGainNode.gain.setTargetAtTime(value, this.ctx!.currentTime, 0.02);
+    if (this.masterGainNode && this.ctx) {
+      this.masterGainNode.gain.setTargetAtTime(value, this.ctx.currentTime, 0.02);
     }
     this.config.masterGain = value;
   }
