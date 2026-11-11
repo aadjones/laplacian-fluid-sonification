@@ -141,6 +141,20 @@ const SUSTAIN_SCALE = 0.85;
 const MAX_PARTIALS = 96;
 
 /**
+ * Most partials one strike may claim.
+ *
+ * A point strike at rank 576 excites hundreds of modes, and used to take every
+ * free voice. Measured over 40 s of ordinary playing the pool sat at 62-96 of
+ * 96, so a new strike got only the voices that happened to be free and the
+ * passage carried 17-20 audible partials. A budget leaves room for several
+ * strikes to coexist, and when the pool is full a new partial takes the place
+ * of the quietest one still ringing: 23-24 audible partials on the same phrase.
+ */
+const STRIKE_BUDGET = 40;
+/** Fade for a stolen voice: long enough not to click, short enough to free it. */
+const STEAL_FADE = 0.006;
+
+/**
  * Peak amplitude of a full-velocity strike, before master gain.
  *
  * Calibrated by measurement, not taste: with the 0.3 master fader this puts a
@@ -180,6 +194,10 @@ interface Partial {
   /** Held partials ring until released, rather than decaying on their own. */
   env?: GainNode;
   held?: boolean;
+  /** Struck partials only: what is needed to estimate the level it has now. */
+  amp?: number;
+  t0?: number;
+  tau?: number;
 }
 
 export class StruckModalStrategy implements SonificationStrategy {
@@ -278,17 +296,60 @@ export class StruckModalStrategy implements SonificationStrategy {
 
     this.fireThunk(now, vel, corner);
 
+    // Rank by what will actually sound, after the contact-time rolloff, so the
+    // budget is spent on the loudest partials rather than the largest weights.
+    const voiced: { k: number; freq: number; amp: number }[] = [];
     for (const k of struck) {
-      if (this.partials.length >= MAX_PARTIALS) break;
       const freq = this.frequencies[k];
       if (!(freq > 0) || freq > this.ctx.sampleRate * 0.45) continue;
-
       const rolloff = 1 / (1 + Math.pow(freq / corner, 2));
       const amp = (weights[k] / l2) * rolloff * vel * OUTPUT_SCALE * jitter(JITTER * 0.8);
-      if (amp < 1e-5) continue;
-
-      this.firePartial(k, freq, amp, now);
+      if (amp >= 1e-5) voiced.push({ k, freq, amp });
     }
+    voiced.sort((a, b) => b.amp - a.amp);
+    if (voiced.length > STRIKE_BUDGET) voiced.length = STRIKE_BUDGET;
+
+    for (const v of voiced) {
+      if (this.partials.length >= MAX_PARTIALS && !this.stealQuieterThan(v.amp, now)) break;
+      this.firePartial(v.k, v.freq, v.amp, now);
+    }
+  }
+
+  /** Estimated present amplitude of a ringing partial; held ones are never stolen. */
+  private levelNow(p: Partial, now: number): number {
+    if (p.held || p.amp === undefined || p.t0 === undefined || p.tau === undefined) return Infinity;
+    const t = Math.max(0, now - p.t0);
+    return p.amp * (PLANE_SPLIT * Math.exp(-t / (p.tau * PLANE_FAST))
+      + (1 - PLANE_SPLIT) * Math.exp(-t / (p.tau * PLANE_SLOW)));
+  }
+
+  /**
+   * Free a voice by fading out the quietest ringing partial, if it is quieter
+   * than the one that wants its place. Returns whether a voice was freed.
+   */
+  private stealQuieterThan(amp: number, now: number): boolean {
+    let quietest = -1;
+    let level = amp;
+    for (let i = 0; i < this.partials.length; i++) {
+      const l = this.levelNow(this.partials[i], now);
+      if (l < level) {
+        level = l;
+        quietest = i;
+      }
+    }
+    if (quietest < 0) return false;
+    const p = this.partials[quietest];
+    p.mod.gain.cancelScheduledValues(now);
+    p.mod.gain.setTargetAtTime(0, now, STEAL_FADE / 3);
+    for (const nd of p.nodes) {
+      if (nd instanceof OscillatorNode) {
+        try { nd.stop(now + STEAL_FADE * 2); } catch { /* already stopped */ }
+      }
+    }
+    // Out of the list now, so update() stops writing its gain; the oscillator's
+    // onended still disconnects the nodes.
+    this.partials.splice(quietest, 1);
+    return true;
   }
 
   /**
@@ -481,7 +542,7 @@ export class StruckModalStrategy implements SonificationStrategy {
       };
     }
 
-    this.partials.push({ mode: k, mod, refW: -1, nodes });
+    this.partials.push({ mode: k, mod, refW: -1, nodes, amp, t0: now, tau });
   }
 
   /**

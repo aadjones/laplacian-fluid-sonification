@@ -28,3 +28,6 @@ dist-ssr
 
 # Source PDFs (42MB; publicly available, extracted text is committed instead)
 reference/*.pdf
+
+# Measurement renders (tools/measure.mjs)
+tools/renders

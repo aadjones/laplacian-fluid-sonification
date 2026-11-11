@@ -756,3 +756,12 @@ function frame(): void {
 }
 
 requestAnimationFrame(frame);
+
+// Measurement hook, dev server only: tools/measure.mjs reads w through this.
+if (import.meta.env.DEV) {
+  (window as unknown as { __lfs: unknown }).__lfs = {
+    get sim() { return sim; },
+    get config() { return config; },
+    get sonifier() { return sonifier; },
+  };
+}
