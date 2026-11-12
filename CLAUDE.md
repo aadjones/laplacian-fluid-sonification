@@ -34,7 +34,7 @@ node tools/compare.mjs <a> <b>     # print two renders side by side
 - `src/viz/gpuRenderer.ts` — WebGL 2. Given `w` each frame, it evaluates the modes per pixel: the figure (bright lines where rotation is zero, warm/cool tint, fading with the fluid), dye on a 1024 grid, and 262,144 particles leaving fading trails
 - `src/audio/sonifier.ts` — one sine per mode at `f = base·√(λ/λmin)`, loudness from `w`
 - `src/audio/amplitude.ts` — L1 shape and peak-referenced loudness (the dissertation's eq. 2)
-- `src/main.ts` — the page: the plate (display only) and the lattice (one pad per mode; a dark pad sounds its mode, a lit pad mutes it; glow follows |w|)
+- `src/main.ts` — the page: the plate (display only) and the lattice (one pad per mode; a dark pad sounds its mode and keeps pushing it for up to a second while held, a lit pad mutes it; glow follows |w|)
 - `tools/` — signal measurement harness; renders go to `tools/renders/` (git-ignored)
 
 ## Things that are true and were expensive to learn

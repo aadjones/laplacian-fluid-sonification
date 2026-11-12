@@ -39,6 +39,14 @@ const config = {
    * wakes a few neighbours.
    */
   press: 100,
+  /**
+   * Playing harder: while a pad is held it keeps pushing its mode, this much
+   * per second for at most `holdSeconds`. A tap is the soft note above; a full
+   * hold reaches about three times that, where a chord breaks into a wash.
+   * A pad controller's strike velocity will feed the same quantity.
+   */
+  holdRate: 250,
+  holdSeconds: 1,
 };
 
 /** A mode holding more than this share of a press counts as sounding. */
@@ -127,6 +135,9 @@ function startAudio(): void {
  */
 const dampers = new Map<number, number>();
 
+/** Pads being held down: pointer id to the mode it is pushing and for how long. */
+const held = new Map<number, { mode: number; seconds: number }>();
+
 // One press, one mode: a dark cell sounds, a bright cell is muted. Each finger
 // is its own pointer, so several cells can be pressed at once.
 lattice.addEventListener('pointerdown', (e) => {
@@ -140,8 +151,25 @@ lattice.addEventListener('pointerdown', (e) => {
     dampers.delete(k);
     sim.w[k] += config.press;
     releaseDye(k);
+    held.set(e.pointerId, { mode: k, seconds: 0 });
+    // Keep hearing about this finger even if it slides off the pad. Throws for
+    // a pointer the browser is not tracking, which only a synthetic event is.
+    try { lattice.setPointerCapture(e.pointerId); } catch { /* not a live pointer */ }
   }
 });
+const letGo = (e: PointerEvent): void => { held.delete(e.pointerId); };
+lattice.addEventListener('pointerup', letGo);
+lattice.addEventListener('pointercancel', letGo);
+
+/** Held pads keep pushing their modes. */
+function applyHolds(seconds: number): void {
+  for (const [id, h] of held) {
+    const push = Math.min(seconds, config.holdSeconds - h.seconds);
+    if (push <= 0) { held.delete(id); continue; }
+    sim.w[h.mode] += config.holdRate * push;
+    h.seconds += push;
+  }
+}
 
 /** A note releases dye into its own figure. See GpuRenderer.injectDye. */
 function releaseDye(k: number): void {
@@ -183,6 +211,7 @@ function frame(): void {
   lastFrame = now;
 
   applyDampers(seconds);
+  applyHolds(seconds);
   for (let i = 0; i < config.stepsPerFrame; i++) sim.step();
 
   // Sound before picture: the audio path should not wait on rendering.
