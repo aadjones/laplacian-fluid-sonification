@@ -1,8 +1,6 @@
 import './style.css';
 import { FluidSim } from './sim/fluid';
-import { DyeField } from './sim/dye';
-import { ParticleSystem } from './sim/particles';
-import { FluidRenderer } from './viz/renderer';
+import { GpuRenderer } from './viz/gpuRenderer';
 import { Sonifier } from './audio/sonifier';
 
 /**
@@ -14,8 +12,11 @@ import { Sonifier } from './audio/sonifier';
  */
 const config = {
   rank: 64,
-  grid: 128,
-  canvasSize: 512,
+  /**
+   * The solver's own velocity grid. Nothing is drawn from it any more (the
+   * renderer evaluates the modes per pixel), so it is kept as small as it goes.
+   */
+  grid: 32,
   stepsPerFrame: 2,
   dt: 0.0001,
   viscosity: 0.5,
@@ -25,7 +26,6 @@ const config = {
    * left the lowest mode ringing for over a minute.
    */
   drag: 40,
-  particleCount: 8000,
   /**
    * How much faster the dye and particles travel than the fluid itself. They
    * are passive tracers and change nothing in `w` or the sound. At true speed
@@ -51,12 +51,7 @@ const sim = new FluidSim({
   rank: config.rank, xRes: config.grid, yRes: config.grid, dt: config.dt, viscosity: config.viscosity,
   drag: config.drag,
 });
-const dye = new DyeField(config.grid, config.grid);
-const particles = new ParticleSystem(config.particleCount, config.grid, config.grid);
 const sonifier = new Sonifier();
-const vorticity = new Float64Array(config.grid * config.grid);
-/** Where each particle was before this frame, for drawing its streak. */
-const previousPositions = particles.positions.slice();
 
 // [page] > [stage] > [plate] (the fluid) + [lattice] (the modes)
 const stage = document.createElement('div');
@@ -66,8 +61,6 @@ const plate = document.createElement('div');
 plate.id = 'plate';
 const canvas = document.createElement('canvas');
 canvas.id = 'fluid';
-canvas.width = config.canvasSize;
-canvas.height = config.canvasSize;
 plate.appendChild(canvas);
 stage.appendChild(plate);
 
@@ -105,7 +98,20 @@ for (let k2 = side; k2 >= 1; k2--) {
 stage.appendChild(lattice);
 
 document.querySelector<HTMLDivElement>('#app')!.appendChild(stage);
-const renderer = new FluidRenderer(canvas);
+const renderer = new GpuRenderer(canvas, side);
+
+/** Mode index for each lattice position, or -1 where the rank has no mode. */
+const modeAt: number[][] = [];
+for (let k1 = 1; k1 <= side; k1++) {
+  modeAt[k1] = [];
+  for (let k2 = 1; k2 <= side; k2++) {
+    modeAt[k1][k2] = sim.pairs.findIndex((p) => p.k1 === k1 && p.k2 === k2);
+  }
+}
+const weightAt = (k1: number, k2: number): number => {
+  const k = modeAt[k1][k2];
+  return k >= 0 ? sim.w[k] : 0;
+};
 
 function startAudio(): void {
   if (sonifier.started) return;
@@ -137,35 +143,10 @@ lattice.addEventListener('pointerdown', (e) => {
   }
 });
 
-/**
- * A note releases dye into its own figure: one thin streak per cell, from near
- * the cell's centre out toward its edge, coloured by the way that cell turns.
- * The fluid turns faster near the middle of a cell than at its rim, so the
- * streak is wound into a spiral. A round drop would only drift.
- */
+/** A note releases dye into its own figure. See GpuRenderer.injectDye. */
 function releaseDye(k: number): void {
   const { k1, k2 } = sim.pairs[k];
-  const span = config.grid - 1;
-  const cellW = span / k1;
-  const cellH = span / k2;
-  const radius = Math.max(1.1, 0.035 * Math.min(cellW, cellH));
-  const spin = Math.sign(sim.w[k]) || 1;
-  const DROPS = 7;
-  for (let j = 0; j < k2; j++) {
-    for (let i = 0; i < k1; i++) {
-      const warm = ((i + j) % 2 === 0 ? 1 : -1) * spin > 0;
-      for (let d = 0; d < DROPS; d++) {
-        // From 8% to 44% of the way across the cell, along its long axis.
-        const t = 0.08 + (0.36 * d) / (DROPS - 1);
-        dye.inject(
-          (i + 0.5 + (cellW >= cellH ? t : 0)) * cellW,
-          (j + 0.5 + (cellW >= cellH ? 0 : t)) * cellH,
-          warm ? 1.0 : 0.25, 0.55, warm ? 0.25 : 1.0,
-          radius,
-        );
-      }
-    }
-  }
+  renderer.injectDye(k1, k2, Math.sign(sim.w[k]) || 1);
 }
 
 // Escape mutes everything: a damper on every mode. No on-screen control.
@@ -204,18 +185,11 @@ function frame(): void {
   applyDampers(seconds);
   for (let i = 0; i < config.stepsPerFrame; i++) sim.step();
 
-  const tracerDt = config.dt * config.stepsPerFrame * config.tracerSpeed;
-  dye.advect(sim.velocity, tracerDt);
-  dye.dissipate(0.995);
-  previousPositions.set(particles.positions);
-  particles.advect(sim.velocity, config.grid, config.grid, tracerDt, 1);
-
   // Sound before picture: the audio path should not wait on rendering.
   sonifier.update(sim.w);
 
-  sim.computeVorticity(vorticity);
-  renderer.render(sim, dye, vorticity, config.press);
-  renderer.renderParticles(particles, previousPositions, config.grid, config.grid);
+  const tracerStep = config.dt * config.stepsPerFrame * config.tracerSpeed;
+  renderer.render(weightAt, tracerStep, config.press);
   drawLattice();
 
   requestAnimationFrame(frame);

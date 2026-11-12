@@ -31,8 +31,7 @@ node tools/compare.mjs <a> <b>     # print two renders side by side
 
 - `src/sim/basis.ts` — eigenfunction basis, ij pair ordering, analytic structure tensor
 - `src/sim/fluid.ts` — `FluidSim`: step loop, velocity and vorticity reconstruction, `injectImpulse`
-- `src/sim/dye.ts`, `src/sim/particles.ts` — passive dye and particles carried by the flow
-- `src/viz/renderer.ts` — Canvas 2D: the figure (bright lines where rotation is zero, warm/cool tint for turning direction, fading with the fluid), dye, and particles drawn as streaks along their motion
+- `src/viz/gpuRenderer.ts` — WebGL 2. Given `w` each frame, it evaluates the modes per pixel: the figure (bright lines where rotation is zero, warm/cool tint, fading with the fluid), dye on a 1024 grid, and 262,144 particles leaving fading trails
 - `src/audio/sonifier.ts` — one sine per mode at `f = base·√(λ/λmin)`, loudness from `w`
 - `src/audio/amplitude.ts` — L1 shape and peak-referenced loudness (the dissertation's eq. 2)
 - `src/main.ts` — the page: the plate (display only) and the lattice (one pad per mode; a dark pad sounds its mode, a lit pad mutes it; glow follows |w|)
@@ -66,8 +65,11 @@ node tools/compare.mjs <a> <b>     # print two renders side by side
 - **No figures inside the pads.** Tried; 64 small grids inside a grid was confusing.
 - **Tracers run 6x faster than the fluid** (`tracerSpeed`). Dye and particles are passive and
   do not affect `w` or the sound; at true speed a note barely turns before it fades.
-- **Dye alone cannot show the flow on this grid.** At 128 cells it smears within a second.
-  Particle streaks carry the motion.
+- **The picture is drawn on the graphics card, at any size.** Each mode's flow is an exact
+  formula, so the picture has no native resolution. The flow has only 64 modes of detail,
+  but dye and particle trails are stretched into filaments far finer than that, which is
+  where the resolution shows. The solver's own grid is no longer drawn from.
+- **No fallback without WebGL 2.** The installation controls its hardware.
 
 ## Data layout
 
