@@ -1,7 +1,7 @@
 /**
  * Side-by-side summary of renders made by tools/measure.mjs.
  *
- *   node tools/compare.mjs baseline voices
+ *   node tools/compare.mjs before after
  */
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -12,16 +12,11 @@ const labels = process.argv.slice(2);
 const runs = labels.map((l) => JSON.parse(readFileSync(join(dir, `${l}.json`), 'utf8')));
 
 const seg = (r, name) => r.segments.find((s) => s.name === name);
-const voices = (r, a, b) => {
-  const v = r.state.filter((s) => s.t >= a && s.t < b).map((s) => s.voices);
-  return v.length ? `${Math.min(...v)}-${Math.max(...v)}` : '';
-};
 const ring = (p) => (p.ringTo20dB ? `${p.ringTo20dB.censored ? '>' : ''}${p.ringTo20dB.seconds}` : '');
 
 const rows = [
   ['AudioContext state', (r) => r.summary.audioContext.stateLast],
   ['AudioContext currentTime (s)', (r) => r.summary.audioContext.currentTimeLast],
-  ['frame rate', (r) => r.summary.fps],
   ['overall peak dB', (r) => r.summary.overall.peakDb],
   ['overall RMS dB', (r) => r.summary.overall.rmsDb],
   ['overall centroid Hz', (r) => r.summary.overall.centroidHz],
@@ -30,20 +25,17 @@ const rows = [
   ['probe 1 centroid Hz', (r) => r.summary.probe1.centroidHz],
   ['probe 1 partials', (r) => r.summary.probe1.partials],
   ['probe 1 ring to -20 dB (s)', (r) => ring(r.summary.probe1)],
-  ['probe 1 beat depth', (r) => r.summary.probe1.beatDepth],
   ['probe 2 peak dB', (r) => r.summary.probe2.peakDb],
   ['probe 2 RMS dB', (r) => r.summary.probe2.rmsDb],
   ['probe 2 centroid Hz', (r) => r.summary.probe2.centroidHz],
   ['probe 2 partials', (r) => r.summary.probe2.partials],
   ['probe 2 ring to -20 dB (s)', (r) => ring(r.summary.probe2)],
-  ['probe 2 beat depth', (r) => r.summary.probe2.beatDepth],
   ['busy 1st half RMS dB', (r) => seg(r, 'busy first half').rmsDb],
   ['busy 2nd half RMS dB', (r) => seg(r, 'busy second half').rmsDb],
   ['busy 1st half centroid Hz', (r) => seg(r, 'busy first half').centroidHz],
   ['busy 2nd half centroid Hz', (r) => seg(r, 'busy second half').centroidHz],
   ['busy 1st half partials', (r) => seg(r, 'busy first half').partials],
   ['busy 2nd half partials', (r) => seg(r, 'busy second half').partials],
-  ['voices in use while busy', (r) => voices(r, r.marks.busy + 2, r.marks.probe2)],
   ['idle RMS dB', (r) => r.summary.idle.rmsDb],
   ['active modes after probe 1', (r) => r.summary.activeModes.afterProbe1],
   ['active modes while busy', (r) => r.summary.activeModes.duringBusy],

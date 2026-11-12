@@ -1,9 +1,9 @@
 /**
  * Signal analysis for tools/measure.mjs.
  *
- * The recording starts when the AudioContext does (the first tap), so audio
- * time is offset from the phrase clock by the first mark. Everything below is
- * reported on the phrase clock.
+ * The recording starts when the AudioContext does (the first pad press), so
+ * audio time is offset from the phrase clock by the first mark. Everything
+ * below is reported on the phrase clock.
  */
 
 function fft(re, im) {
@@ -105,42 +105,6 @@ function ringTime(x, sr, a, b) {
   return { seconds: round((env.length - pi) * 0.05), censored: true };
 }
 
-/**
- * Depth of slow amplitude modulation: how much of the 20 ms RMS envelope's
- * variation lies between 0.5 and 8 Hz, relative to its mean. This is the
- * number that says whether partial pairs are beating.
- */
-function beatDepth(x, sr, a, b) {
-  const hop = Math.floor(sr * 0.02);
-  const env = [];
-  for (let s = Math.floor(a * sr); s + hop <= Math.min(x.length, b * sr); s += hop) {
-    let sq = 0;
-    for (let i = s; i < s + hop; i++) sq += x[i] * x[i];
-    env.push(Math.sqrt(sq / hop));
-  }
-  const size = 256; // 5.12 s of envelope
-  if (env.length < size) return null;
-  const start = env.length - size;
-  let mean = 0;
-  for (let i = 0; i < size; i++) mean += env[start + i];
-  mean /= size;
-  if (mean < 1e-6) return 0;
-  // Detrend with a line so a plain decay does not read as modulation.
-  const first = env[start], lastV = env[start + size - 1];
-  const re = new Float64Array(size), im = new Float64Array(size);
-  for (let i = 0; i < size; i++) {
-    const trend = first + ((lastV - first) * i) / (size - 1);
-    re[i] = (env[start + i] - trend) * (0.5 - 0.5 * Math.cos((2 * Math.PI * i) / size));
-  }
-  fft(re, im);
-  let p = 0;
-  for (let i = 1; i < size / 2; i++) {
-    const f = i / (size * 0.02);
-    if (f >= 0.5 && f <= 8) p += re[i] * re[i] + im[i] * im[i];
-  }
-  return round(Math.sqrt(p) / (size * mean) * 4, 4);
-}
-
 export function analyse(pcm, sr, marks, state) {
   const offset = marks.probe1; // audio t=0 is roughly the first tap
   const A = (t) => t - offset;
@@ -180,18 +144,15 @@ export function analyse(pcm, sr, marks, state) {
       wallSecondsRecorded: round(pcm.length / sr, 2),
       sampleRate: sr,
     },
-    fps: last.fps,
     rank: last.rank,
     overall: windowStats(pcm, sr, 0, pcm.length / sr),
     probe1: {
       ...windowStats(pcm, sr, A(marks.probe1), A(marks.probe1 + 6)),
       ringTo20dB: ringTime(pcm, sr, A(marks.probe1), A(marks.chord) - 0.5),
-      beatDepth: beatDepth(pcm, sr, A(marks.probe1), A(marks.probe1 + 8)),
     },
     probe2: {
       ...windowStats(pcm, sr, A(marks.probe2), A(marks.probe2 + 6)),
       ringTo20dB: ringTime(pcm, sr, A(marks.probe2), A(marks.idle) - 0.5),
-      beatDepth: beatDepth(pcm, sr, A(marks.probe2), A(marks.probe2 + 8)),
     },
     idle: windowStats(pcm, sr, A(marks.idle + 5), A(marks.end)),
     activeModes: {

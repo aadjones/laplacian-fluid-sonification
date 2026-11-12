@@ -3,7 +3,7 @@
  *
  *   node tools/measure.mjs <label> [url]
  *
- * Drives a fixed, seeded, pointer-only phrase against the running dev server,
+ * Plays a fixed phrase on the lattice pads against the running dev server,
  * records the real post-limiter output, and writes <label>.wav and
  * <label>.json into tools/renders/. Compare two labels with tools/compare.mjs.
  *
@@ -50,7 +50,8 @@ const { chromium } = createRequire(import.meta.url)(findPlaywright());
 const browser = await chromium.launch({
   executablePath: findChrome(),
   headless: true,
-  args: ['--autoplay-policy=no-user-gesture-required'],
+  // The picture needs the real graphics card, not the software rasteriser.
+  args: ['--autoplay-policy=no-user-gesture-required', '--use-angle=metal', '--enable-gpu', '--ignore-gpu-blocklist'],
 });
 const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
 page.on('pageerror', (e) => console.error('PAGE ERROR', e.message));
@@ -91,8 +92,6 @@ await page.addInitScript(() => {
 });
 
 await page.goto(url + '?v=' + Date.now());
-const box = await page.locator('canvas#fluid').boundingBox();
-const at = (fx, fy) => [box.x + fx * box.width, box.y + fy * box.height];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const t0 = Date.now();
@@ -123,15 +122,11 @@ async function poll() {
       rank: w ? w.length : 0,
       participation: l2 > 0 ? (l1 * l1) / l2 : 0,
       wL1: l1,
-      memory: window.__lfs?.sediment?.total ?? 0,
-      hum: window.__lfs?.sonifier?.strategies?.[0]?.hum?.size ?? 0,
-      voices: window.__lfs?.sonifier?.strategies?.[0]?.partials?.length ?? -1,
-      fps: document.querySelector('#fps-display')?.textContent ?? '',
     };
   });
   const buf = Buffer.from(r.pcm, 'base64');
   samples.push(new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4).slice());
-  state.push({ t: (Date.now() - t0) / 1000, ctxState: r.ctxState, ctxTime: r.ctxTime, participation: r.participation, wL1: r.wL1, rank: r.rank, voices: r.voices, memory: r.memory, hum: r.hum, fps: r.fps, sampleRate: r.sampleRate });
+  state.push({ t: (Date.now() - t0) / 1000, ctxState: r.ctxState, ctxTime: r.ctxTime, participation: r.participation, wL1: r.wL1, rank: r.rank, sampleRate: r.sampleRate });
 }
 let polling = true;
 const poller = (async () => { while (polling) { await poll(); await sleep(500); } })();

@@ -1,5 +1,11 @@
 # Register
 
+> **History, not a to-do list.** This describes the instrument that was abandoned on
+> 2026-11-11 (hammer, bow, sustain, stacks, memory), preserved on the branch
+> `fluid/physics-audio-overhaul`. The project restarted around one rule, now on `main`; see
+> `CLAUDE.md` for the current state. The measurements and dead ends below are
+> still worth knowing. The proposals are not queued.
+
 Consolidated state of the research program. Rows come from the four agent reports
 in `proposals/`, filtered to what was actually verified against the code. Status
 is what is true on this branch.

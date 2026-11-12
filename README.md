@@ -1,101 +1,79 @@
-# Laplacian Fluid Sonification
+# A Chladni plate made of fluid
 
-Real-time 2D fluid simulation with bidirectional eigenmode↔frequency sonification, running in the browser.
+A real-time instrument in the browser. A fluid is held on a square plate; every shape it
+can take has a sound, and every sound has a shape.
 
-<img width="480" alt="vorticity visualization" src="screenshot-1.png">
+<img width="800" alt="The plate on the left, showing two whirlpools with dye wound through them; the 8 by 8 lattice of pads on the right, three of them lit" src="screenshot.png">
 
-## Concept
+## What it does
 
-Laplacian eigenfunctions form a natural basis for incompressible fluid flow on a bounded domain. Each eigenmode (k₁,k₂) has a spatial frequency λ = k₁² + k₂² that maps directly to an audible frequency—the correspondence is physically natural, not arbitrary.
+The fluid is built from 64 modes, the Laplacian eigenfunctions of the square. Each mode is
+a pattern of whirlpools, and each is assigned one pitch.
 
-The system is **bidirectional**:
-- **Fluid→Sound**: The simulation evolves eigenmode coefficients `w`, which drive a resonant filter bank
-- **Sound→Fluid**: Composed frequencies set `w` directly, visualizing the corresponding flow pattern
+- **One mode alone is a still figure and a pure note.** It is an exact steady solution of
+  the fluid equations, so it holds its shape until it fades.
+- **Two or more modes set each other moving.** They exchange energy, the figure starts to
+  flow, and frequencies appear that nobody played.
+- **Played hard, a chord breaks into a wash.** How much energy goes in decides how far it
+  spreads.
 
-The `w` vector is the universal state. Simulation, visualization, and sonification all read/write it.
+The fluid's 64 coefficients are the only state. The picture is drawn from them and the
+sound is read from them; nothing is triggered or stored anywhere else.
 
-### Theory
+## Playing it
 
-Based on De Witt et al., "Fluid Simulation Using Laplacian Eigenfunctions" and the sonification system from Aaron Demby Jones's dissertation "Seeing and Hearing Fluid Subspaces" (UCSB 2017).
+| Gesture | What happens |
+|---|---|
+| Press a dark pad | That mode goes into the fluid: you see its figure and hear its note |
+| Hold a pad (up to a second) | Plays it harder |
+| Press a lit pad | Mutes that mode |
+| Drag on the plate | Stirs: a broad push along the drag that moves the large, slow modes |
+| Escape | Mutes everything |
 
-**Simulation loop** (per timestep):
-1. Advect via structure tensor: `wDot[k] = w · (C_k · w)` (O(rank³) quadratic form)
-2. Euler integration: `w += dt · wDot`
-3. Energy correction: rescale to preserve initial enstrophy
-4. Viscous diffusion: `w[k] *= exp(λ_k · dt · ν)`
-5. Reconstruct velocity: `v = U · w`
+Several pads can be pressed at once on a touch screen. Pads glow with how much of their
+mode the fluid holds, so the lattice is also a live picture of the spectrum.
 
-**Frequency mapping** (physical membrane overtone series):
-```
-f_k = fundamental · λ_k^(1/s)    (s=2 gives f ∝ √λ)
-```
-Low spatial modes → low pitch, high spatial modes → high pitch, matching how a rectangular membrane vibrates.
+On the plate, the bright lines are where the fluid's rotation is zero: the boundaries
+between cells turning one way and cells turning the other. Warm and cool tints show the
+direction of turning. The fine lines are particle trails and the coloured ribbons are dye
+released by each note.
 
-**Sonification** (subtractive synthesis):
-```
-white noise → bandpass[k] (center=f_k, Q∝|w[k]|) → gain[k] (∝w[k]²) → master → speakers
-```
-Each eigenmode is a resonance of the 2D domain. Filtering noise through them is literally "what would this cavity sound like if excited."
-
-## Quick Start
+## Running it
 
 ```bash
 npm install
-npm run dev       # Open http://localhost:5173
-npm test          # 25 tests
-npm run build     # Production build
+npm run dev      # then open the printed address
+npm test         # solver tests
+npm run build    # type check and production build
 ```
 
-## Controls
+It needs a browser with WebGL 2 and float render targets (current Chrome or Firefox on a
+machine with a graphics card).
 
-| Input | Action |
-|---|---|
-| Drag canvas | Inject vorticity (also starts audio on first click) |
-| Space | Pause / unpause |
-| S | Toggle sound |
-| M | Switch Simulation / Compose mode |
-| R | Reset |
-| 1-9 (compose mode) | Directly activate individual eigenmodes |
+## How it works
 
-All simulation parameters are adjustable via the config panel sliders:
+- **Fluid.** The method is De Witt, Lessig and Fiume, *Fluid Simulation Using Laplacian
+  Eigenfunctions*. The velocity field is a sum of eigenfunctions, and the fluid equations
+  become equations for the coefficients `w`, with the interaction between modes held in a
+  precomputed, sparse structure tensor. An even drag on every mode lets notes end.
+- **Sound.** One sine per mode at `f = 110 Hz · √(λ/λmin)`, where `λ = k₁² + k₂²`. Its
+  loudness follows that mode's coefficient. Because `λ(nk₁, nk₂) = n²·λ(k₁, k₂)`, every
+  family of modes lands on an exact harmonic series.
+- **Picture.** Each mode's flow is an exact formula, so the graphics card evaluates it per
+  pixel from the 64 coefficients. Dye and about 260,000 particles are carried by that flow.
+  They are passive, and run six times faster than the fluid so the motion is visible.
 
-| Parameter | Default | Description |
-|---|---|---|
-| Modes (rank) | 32 | Number of eigenmodes in the basis |
-| Grid | 128 | Spatial grid resolution |
-| Viscosity | 0.005 | Damping coefficient (higher modes decay faster) |
-| Steps/frame | 50 | Simulation substeps per render frame (speed control) |
-| Click force | 5000 | Impulse magnitude when dragging |
-| Timestep | 0.0001 | Euler integration step size |
+## Background
 
-## Architecture
+This descends from Aaron Demby Jones's dissertation, *Seeing and Hearing Fluid Subspaces*
+(UCSB Media Arts and Technology, 2017), which mapped the modes of pre-rendered 3D fluid
+simulations to sound offline. This version runs in real time, so it can be played.
 
-```
-src/
-  sim/
-    basis.ts       Eigenfunction basis, ij pairs, structure tensor C
-    fluid.ts       FluidSim class: step loop, reconstruct, inject, setCoefficients
-    basis.test.ts  14 tests: pairs, basis properties, structure tensor
-    fluid.test.ts  11 tests: energy conservation, dynamics, reconstruction
-  viz/
-    renderer.ts    Canvas vorticity colormap (red=CCW, blue=CW)
-  audio/
-    sonifier.ts    Resonant filter bank, bidirectional freq↔mode mapping
-  main.ts          App shell, config panel, interaction, main loop
-```
+`research/` holds notes from an earlier, more elaborate version of the instrument, kept as
+history. `CLAUDE.md` records the working rules and the current state.
 
-### Key design decisions
+## Measuring the sound
 
-- **Subtractive synthesis**: Resonant bandpass filters on white noise instead of sine oscillators. Each filter's Q and gain are driven by |w[k]|, producing a sound that responds dynamically to the flow—active modes ring sharply, inactive modes fade to silence.
-- **Analytic structure coefficients**: Uses closed-form trig product-to-sum identities instead of numerical integration. The tensor is sparse due to selection rules.
-- **Column-major flat arrays**: Velocity basis U and structure tensor C stored as `Float64Array` for cache-friendly access in the inner loop.
-- **Energy correction**: Rescales w after advection to prevent numerical energy drift (same as C++ reference).
-- **Live config panel**: All parameters adjustable in real-time. "Cold" params (rank, grid, dt) rebuild the sim; "hot" params (viscosity, steps/frame, force) apply instantly.
-
-## C++ Reference
-
-The simulation math is ported from `laplacianEigen2D.cpp` in the UCSB LaplacianEigenfunctions codebase. Key correspondences:
-- `buildIJPairs` → `buildIjPairs`
-- `buildVelocityBasis` + `eigenfunction()` → `buildVelocityBasis`
-- `buildC` + `structureCoefficientAnalytic` → `buildStructureTensor` + `structureCoefficientAnalytic`
-- `stepEigenfunctions` → `FluidSim.step()`
+With the dev server running, `node tools/measure.mjs <label>` plays a fixed phrase on the
+pads in a real browser, records the actual output, and writes a WAV and a JSON report to
+`tools/renders/`. `node tools/compare.mjs <a> <b>` prints two reports side by side.

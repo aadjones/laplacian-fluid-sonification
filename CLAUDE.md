@@ -11,10 +11,10 @@ the sound is read from it. The synthesis may be anything, but what plays, when, 
 and with what spectrum must come from the fluid. Nothing is triggered, scheduled or
 remembered outside `w`.
 
-Before adding anything, check it against that rule. This branch (`restart/chladni-fluid`,
-cut 2026-11-11) exists because the previous instrument grew a hammer, a bow, sustain,
-stacks and a memory, each a reasonable fix, until it was a modal synth with a fluid beside
-it. That version is preserved on `fluid/physics-audio-overhaul`.
+Before adding anything, check it against that rule. The piece was restarted from scratch on
+2026-11-11 because the previous instrument grew a hammer, a bow, sustain, stacks and a
+memory, each a reasonable fix, until it was a modal synth with a fluid beside it. That
+version is preserved on the branch `fluid/physics-audio-overhaul`; `main` is this one.
 
 ## Commands
 
@@ -76,6 +76,34 @@ node tools/compare.mjs <a> <b>     # print two renders side by side
   where the resolution shows. The solver's own grid is no longer drawn from.
 - **No fallback without WebGL 2.** The installation controls its hardware.
 
+## Where it stands (stopping spot, 2026-11-11)
+
+Playable: notes, held notes, chords, mute, mute-all, stir, and the picture on the graphics
+card. Nothing is queued. The agreed next step is for Aaron to play it and say what bothers
+him; do not add features ahead of that.
+
+Parked, not started:
+- A pad controller over Web MIDI (Chrome or Firefox; Safari has none). Strike velocity
+  would feed the same quantity as hold length. A touch surface or jog wheel suits the stir
+  better than a joystick. No hardware has been chosen or checked.
+- A recorded performance played back into the same fluid, for a composed piece.
+- The piece demonstrating itself when idle.
+- Wall text or a real Chladni plate beside it, to tell a visitor what they are seeing.
+
+Known and left alone:
+- **Loudness is relative.** It is measured against the loudest recent sound, so the first
+  note after silence is always full scale and a soft note is as loud as a hard chord.
+- **High notes are short.** They feel viscosity on top of drag, so pitch and length are
+  linked, as on a bell.
+- **A stir leaves no mark.** No dye is released under the drag.
+- **A very hard circular stir looks smooth to the point of blur.**
+- **Frame rate at full projector size is unmeasured.** 60 fps was measured with the plate at
+  882 pixels; the cap is 2048.
+- **Claude has not listened to it.** Every audio claim is from measurement of the output.
+
+Unused but kept in the solver, because they are tested and ported from the reference:
+`injectImpulse`, `setCoefficients`, `conserveEnstrophy`, and the dense `U` and `C` getters.
+
 ## Data layout
 
 - Velocity field: `Float64Array`, length `2·xRes·yRes`; u in the first half, v in the second.
@@ -85,7 +113,7 @@ node tools/compare.mjs <a> <b>     # print two renders side by side
 ## Background
 
 - `research/FLOOR.md` — what the 2017 dissertation did, chose not to do, and could not do
-- `research/REGISTER.md` and `research/proposals/` — history of the previous instrument;
+- `research/REGISTER.md`, `research/proposals/` and `research/SONIFICATION_IDEAS.md` — history of the previous instrument;
   useful for measurements and dead ends, not as a to-do list
 - `reference/text/*.txt` — the dissertation and papers, page-marked
 - C++ reference for the solver: `~/Documents/Code/app-development/UCSB/LaplacianEigenfunctions/projects/laplacianEigen2D/laplacianEigen2D.cpp`
