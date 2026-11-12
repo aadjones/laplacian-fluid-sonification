@@ -104,8 +104,10 @@ uniform float uKeep;
 in vec2 vUv;
 out vec4 outColor;
 void main() {
-  // Semi-Lagrangian: look upstream for what arrives here.
-  vec2 from = vUv - velocityAt(vUv) * uStep / PI;
+  // Semi-Lagrangian: look upstream for what arrives here. Midpoint rule, so
+  // dye going round a whirlpool stays on its circle instead of drifting off it.
+  vec2 half_ = vUv - velocityAt(vUv) * (0.5 * uStep / PI);
+  vec2 from = vUv - velocityAt(half_) * uStep / PI;
   outColor = texture(uDye, from) * uKeep;
 }`;
 
@@ -157,7 +159,11 @@ float hash(vec2 p) {
 
 void main() {
   vec4 p = texelFetch(uParticles, ivec2(gl_FragCoord.xy), 0);
-  p.xy += velocityAt(p.xy) * uStep / PI;
+  // Midpoint rule. A single straight step round a whirlpool lands slightly
+  // outside the circle every time, and over a few seconds every particle ends
+  // up pressed against the walls.
+  vec2 mid = p.xy + velocityAt(p.xy) * (0.5 * uStep / PI);
+  p.xy += velocityAt(mid) * uStep / PI;
   p.z += 1.0;
   float life = 200.0 + 500.0 * p.w;
   bool outside = p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0;
@@ -201,8 +207,10 @@ uniform float uStrength;
 in float vSpeed;
 out vec4 outColor;
 void main() {
-  // Still fluid leaves nothing; moving fluid draws, more the faster it goes.
-  float a = uStrength * smoothstep(0.02, 1.5, vSpeed);
+  // Still fluid leaves nothing; moving fluid draws. Past a few pixels a frame
+  // the stroke gets longer, not brighter: each particle lays down the same
+  // light however fast it goes, or a strong flow burns the plate out to white.
+  float a = uStrength * smoothstep(0.02, 1.5, vSpeed) * min(1.0, 4.0 / max(vSpeed, 1e-3));
   outColor = vec4(vec3(1.0, 0.95, 0.86) * a, 1.0);
 }`;
 
@@ -237,7 +245,8 @@ void main() {
   float width = 1.6 * uPixels / 512.0;
   float line = clamp(width - dist, 0.0, 1.0) * uPresence;
 
-  float tint = min(1.0, abs(r.x) / uReference) * 0.3;
+  // Rolls off above one note's strength instead of clipping to a flat colour.
+  float tint = (1.0 - exp(-abs(r.x) / uReference)) * 0.42;
   vec3 colour = (r.x > 0.0 ? vec3(1.0, 0.5, 0.2) : vec3(0.2, 0.5, 1.0)) * tint;
 
   // Dye and trails can pile up past white; roll them off instead of clipping.

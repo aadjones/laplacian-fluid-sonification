@@ -47,6 +47,17 @@ const config = {
    */
   holdRate: 250,
   holdSeconds: 1,
+  /**
+   * Stirring: dragging on the plate pushes the fluid along the drag, softly
+   * and over a wide area, so it sets the large slow modes drifting without
+   * choosing a note. `stirRate` is the force per second at full drag speed,
+   * `stirSpread` the width of the push (the plate is π wide), and
+   * `stirFullSpeed` the drag speed, in plate widths per second, that reaches
+   * full force.
+   */
+  stirRate: 1000,
+  stirSpread: 0.5,
+  stirFullSpeed: 1.5,
 };
 
 /** A mode holding more than this share of a press counts as sounding. */
@@ -170,6 +181,49 @@ function applyHolds(seconds: number): void {
     h.seconds += push;
   }
 }
+
+// --- Stir ---
+
+/** Where the stirring pointer was last, in plate space [0,1]², and when. */
+let stir: { id: number; x: number; y: number; t: number } | null = null;
+
+function platePos(e: PointerEvent): { x: number; y: number } {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)),
+    y: Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height)),
+  };
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  startAudio();
+  stir = { id: e.pointerId, ...platePos(e), t: performance.now() };
+  try { canvas.setPointerCapture(e.pointerId); } catch { /* not a live pointer */ }
+});
+
+canvas.addEventListener('pointermove', (e) => {
+  if (!stir || e.pointerId !== stir.id) return;
+  const { x, y } = platePos(e);
+  const now = performance.now();
+  const seconds = Math.min(0.05, Math.max(1e-3, (now - stir.t) / 1000));
+  const dx = x - stir.x;
+  const dy = y - stir.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist > 1e-6) {
+    // Force along the drag, growing with its speed. Scaled by elapsed time, so
+    // a stir is the same push however many move events the browser sends.
+    const speed = Math.min(1, dist / seconds / config.stirFullSpeed);
+    const force = config.stirRate * speed * seconds;
+    sim.push(x * Math.PI, y * Math.PI, (dx / dist) * force, (dy / dist) * force, config.stirSpread);
+  }
+  stir = { id: stir.id, x, y, t: now };
+});
+
+const endStir = (e: PointerEvent): void => {
+  if (stir && e.pointerId === stir.id) stir = null;
+};
+canvas.addEventListener('pointerup', endStir);
+canvas.addEventListener('pointercancel', endStir);
 
 /** A note releases dye into its own figure. See GpuRenderer.injectDye. */
 function releaseDye(k: number): void {

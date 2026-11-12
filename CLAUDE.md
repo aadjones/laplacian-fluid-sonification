@@ -22,7 +22,7 @@ it. That version is preserved on `fluid/physics-audio-overhaul`.
 npm install
 npm run dev           # Vite dev server
 npm run build         # Type check + production build
-npm test              # 32 tests (vitest)
+npm test              # 36 tests (vitest)
 node tools/measure.mjs <label>     # record a fixed 110 s phrase played on the pads (dev server running)
 node tools/compare.mjs <a> <b>     # print two renders side by side
 ```
@@ -30,11 +30,11 @@ node tools/compare.mjs <a> <b>     # print two renders side by side
 ## Source
 
 - `src/sim/basis.ts` — eigenfunction basis, ij pair ordering, analytic structure tensor
-- `src/sim/fluid.ts` — `FluidSim`: step loop, velocity and vorticity reconstruction, `injectImpulse`
+- `src/sim/fluid.ts` — `FluidSim`: step loop, velocity and vorticity reconstruction, `injectImpulse` (a point kick), `push` (a broad stir)
 - `src/viz/gpuRenderer.ts` — WebGL 2. Given `w` each frame, it evaluates the modes per pixel: the figure (bright lines where rotation is zero, warm/cool tint, fading with the fluid), dye on a 1024 grid, and 262,144 particles leaving fading trails
 - `src/audio/sonifier.ts` — one sine per mode at `f = base·√(λ/λmin)`, loudness from `w`
 - `src/audio/amplitude.ts` — L1 shape and peak-referenced loudness (the dissertation's eq. 2)
-- `src/main.ts` — the page: the plate (display only) and the lattice (one pad per mode; a dark pad sounds its mode and keeps pushing it for up to a second while held, a lit pad mutes it; glow follows |w|)
+- `src/main.ts` — the page: the plate (drag to stir) and the lattice (one pad per mode; a dark pad sounds its mode and keeps pushing it for up to a second while held, a lit pad mutes it; glow follows |w|)
 - `tools/` — signal measurement harness; renders go to `tools/renders/` (git-ignored)
 
 ## Things that are true and were expensive to learn
@@ -59,9 +59,14 @@ node tools/compare.mjs <a> <b>     # print two renders side by side
 
 ## Decisions already made
 
-- **The lattice is the only input.** Poking and dragging on the plate was removed: each
-  pointer move fired a full-strength point kick, which excites every mode at once. A real
-  stir (a broad, gentle push) is a candidate, not yet built.
+- **Two inputs: pads and a stir.** Pads choose notes. A drag on the plate is a stir: a broad,
+  soft push along the drag (`FluidSim.push`), which moves the large slow modes without
+  choosing a note. A stroke across the middle drives (1,2); stirring in circles spins up
+  (1,1). The earlier "stir" fired a full-strength point kick on every pointer move, which
+  excites every mode at once, and was removed. A uniform push does nothing in a closed box
+  (pressure cancels it), so the push has to be local.
+- **Tracers use midpoint integration.** With single Euler steps, particles circling a strong
+  whirlpool drift outward and pile up at the walls within seconds.
 - **No figures inside the pads.** Tried; 64 small grids inside a grid was confusing.
 - **Tracers run 6x faster than the fluid** (`tracerSpeed`). Dye and particles are passive and
   do not affect `w` or the sound; at true speed a note barely turns before it fades.

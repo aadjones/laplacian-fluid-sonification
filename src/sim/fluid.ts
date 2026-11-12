@@ -379,6 +379,30 @@ export class FluidSim {
   }
 
   /**
+   * Push the fluid with a broad, soft-edged force centred at (x, y), both in
+   * [0, π], in direction (fx, fy). This is a stir.
+   *
+   * `injectImpulse` is the same projection for a force at a single point, and
+   * a point excites every mode at once. Spreading the force over a Gaussian of
+   * width `spread` attenuates mode k by exp(-λ_k·spread²/2), so a wide push
+   * moves the large, slow modes and leaves the fine ones alone. (The
+   * attenuation is exact away from the walls and approximate near them.)
+   *
+   * A push that was the same everywhere would do nothing at all: in a closed
+   * box a uniform force is balanced entirely by pressure. It has to be local.
+   */
+  push(x: number, y: number, fx: number, fy: number, spread: number): void {
+    const { rank } = this.config;
+    for (let k = 0; k < rank; k++) {
+      const { k1, k2 } = this.pairs[k];
+      const inv = this.invLambda[k];
+      const u = inv * k2 * Math.sin(k1 * x) * Math.cos(k2 * y);
+      const v = -inv * k1 * Math.cos(k1 * x) * Math.sin(k2 * y);
+      this.w[k] += (u * fx + v * fy) * Math.exp(-0.5 * spread * spread / inv);
+    }
+  }
+
+  /**
    * Set w directly from an external source (e.g., audio-driven mode).
    * This is the sound→fluid direction of the bidirectional mapping.
    */

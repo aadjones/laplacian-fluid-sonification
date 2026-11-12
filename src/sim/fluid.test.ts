@@ -107,6 +107,64 @@ describe('FluidSim', () => {
     expect(after).toBeLessThan(before * 1e-3);
   });
 
+  describe('push (a stir)', () => {
+    const fresh = () => new FluidSim({ rank: 64, xRes: 16, yRes: 16 });
+    const mode = (sim: FluidSim, k1: number, k2: number) =>
+      sim.w[sim.pairs.findIndex((p) => p.k1 === k1 && p.k2 === k2)];
+    const C = Math.PI / 2;
+
+    it('a wide push across the centre mostly moves the largest matching mode', () => {
+      const sim = fresh();
+      sim.push(C, C, 100, 0, 0.5);
+      // A rightward jet through the middle returns along the top and bottom
+      // walls: two cells stacked vertically, which is mode (1,2).
+      let top = 0;
+      for (let k = 0; k < 64; k++) top = Math.max(top, Math.abs(sim.w[k]));
+      expect(Math.abs(mode(sim, 1, 2))).toBe(top);
+      // By symmetry about the centre, even k1 or odd k2 cannot be excited.
+      expect(mode(sim, 1, 1)).toBeCloseTo(0, 10);
+      expect(mode(sim, 2, 2)).toBeCloseTo(0, 10);
+      expect(mode(sim, 2, 1)).toBeCloseTo(0, 10);
+    });
+
+    it('a wider push leaves the fine modes alone', () => {
+      const share = (spread: number) => {
+        const sim = fresh();
+        sim.push(1.1, 0.7, 60, 80, spread);
+        let fine = 0, all = 0;
+        for (let k = 0; k < 64; k++) {
+          const a = Math.abs(sim.w[k]);
+          all += a;
+          if (sim.eigenvalue(k) > 20) fine += a;
+        }
+        return fine / all;
+      };
+      expect(share(0)).toBeGreaterThan(0.4);
+      expect(share(0.5)).toBeLessThan(0.1);
+      expect(share(0.5)).toBeLessThan(share(0.25));
+    });
+
+    it('is linear: reversing or doubling the force reverses or doubles the result', () => {
+      const a = fresh(), b = fresh(), c = fresh();
+      a.push(1.0, 2.0, 30, -50, 0.4);
+      b.push(1.0, 2.0, -30, 50, 0.4);
+      c.push(1.0, 2.0, 60, -100, 0.4);
+      for (let k = 0; k < 64; k++) {
+        expect(b.w[k]).toBeCloseTo(-a.w[k], 10);
+        expect(c.w[k]).toBeCloseTo(2 * a.w[k], 10);
+      }
+    });
+
+    it('with no spread it is the point impulse', () => {
+      const a = new FluidSim({ rank: 16, xRes: 17, yRes: 17 });
+      const b = new FluidSim({ rank: 16, xRes: 17, yRes: 17 });
+      const dx = Math.PI / 16;
+      a.injectImpulse(5, 9, 40, 70);
+      b.push(5 * dx, 9 * dx, 40, 70, 0);
+      for (let k = 0; k < 16; k++) expect(b.w[k]).toBeCloseTo(a.w[k], 9);
+    });
+  });
+
   it('setCoefficients sets w and reconstructs velocity', () => {
     const sim = new FluidSim({ rank: 4, xRes: 16, yRes: 16 });
     sim.setCoefficients([1, 0, 0, 0]);
