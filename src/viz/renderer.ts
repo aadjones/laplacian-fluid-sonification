@@ -1,13 +1,21 @@
 /**
  * Canvas-based fluid visualization.
  *
- * Renders dye transport (primary) with a subtle vorticity underlay.
- * Dye creates the ink-in-water aesthetic; vorticity adds structure in dark areas.
+ * The plate is drawn the way a Chladni plate is read: by its still lines. The
+ * bright lines are where the fluid's rotation is zero, the boundaries between
+ * cells turning one way and cells turning the other. One mode alone gives a
+ * clean grid; several give curves that drift and tangle. Dye and particles
+ * ride on top and show that it is flowing.
  */
 
 import { FluidSim } from '../sim/fluid';
 import type { DyeField } from '../sim/dye';
 import type { ParticleSystem } from '../sim/particles';
+
+/** Width of a still line, in canvas pixels. */
+const LINE_WIDTH = 1.8;
+/** Brightness of the turning-direction tint at one note's strength. */
+const TINT = 0.45;
 
 export class FluidRenderer {
   private canvas: HTMLCanvasElement;
@@ -21,17 +29,15 @@ export class FluidRenderer {
   }
 
   /**
-   * Render dye field blended with vorticity underlay.
-   * Dye is the primary visual; vorticity shows through where dye is absent.
+   * Draw the figure, then the dye over it.
    *
-   * `vorticity` is supplied by the caller (see `FluidSim.computeVorticity`)
-   * rather than finite-differenced from the velocity here, so that a masked
-   * field can be drawn: soloing a harmonic family paints that stack's standing
-   * pattern alone. It also stops this from allocating a grid-sized array on
-   * every frame. `vortGain` brightens the underlay, which matters when a solo
-   * makes the pattern the subject rather than a texture behind the dye.
+   * `vorticity` comes from `FluidSim.computeVorticity`. `reference` is the
+   * vorticity of one ordinary note: the figure is drawn at full strength at
+   * that level and fades as the fluid settles, so the picture goes dark when
+   * the sound goes quiet. (It used to be normalised to its own maximum, which
+   * drew a dying note as brightly as a fresh one.)
    */
-  render(sim: FluidSim, dye: DyeField, vorticity: Float64Array, vortGain = 1): void {
+  render(sim: FluidSim, dye: DyeField, vorticity: Float64Array, reference: number): void {
     const { xRes, yRes } = sim.config;
     const fieldSize = xRes * yRes;
 
@@ -39,38 +45,52 @@ export class FluidRenderer {
     for (let i = 0; i < fieldSize; i++) {
       maxVort = Math.max(maxVort, Math.abs(vorticity[i]));
     }
-    if (maxVort < 1e-10) maxVort = 1;
+    // Square root, so the figure is still readable well into a note's decay.
+    const presence = Math.sqrt(Math.min(1, maxVort / reference));
+    // Keeps near-flat, near-zero regions from reading as one wide line.
+    const flat = Math.max(maxVort, 1e-9) * 1e-3;
 
     const cw = this.canvas.width;
     const ch = this.canvas.height;
     const data = this.imageData.data;
+    const sx = (xRes - 1) / (cw - 1);
+    const sy = (yRes - 1) / (ch - 1);
 
     for (let cy = 0; cy < ch; cy++) {
+      const fy = cy * sy;
+      const y0 = Math.min(Math.floor(fy), yRes - 2);
+      const ty = fy - y0;
       for (let cx = 0; cx < cw; cx++) {
-        const gx = Math.min(Math.floor(cx * xRes / cw), xRes - 1);
-        const gy = Math.min(Math.floor(cy * yRes / ch), yRes - 1);
-        const idx = gy * xRes + gx;
-        const pixIdx = (cy * cw + cx) * 4;
+        const fx = cx * sx;
+        const x0 = Math.min(Math.floor(fx), xRes - 2);
+        const tx = fx - x0;
+        const i00 = y0 * xRes + x0;
+        const v00 = vorticity[i00];
+        const v10 = vorticity[i00 + 1];
+        const v01 = vorticity[i00 + xRes];
+        const v11 = vorticity[i00 + xRes + 1];
 
-        // Vorticity underlay (subtle)
-        const vort = vorticity[idx] / maxVort;
-        let vr: number, vg: number, vb: number;
-        if (vort > 0) {
-          vr = vort * 40 * vortGain; vg = vort * 15 * vortGain; vb = vort * 8 * vortGain;
-        } else {
-          vr = -vort * 8 * vortGain; vg = -vort * 15 * vortGain; vb = -vort * 40 * vortGain;
-        }
+        // Bilinear value and its gradient, in units per canvas pixel.
+        const v = (v00 * (1 - tx) + v10 * tx) * (1 - ty) + (v01 * (1 - tx) + v11 * tx) * ty;
+        const dx = ((v10 - v00) * (1 - ty) + (v11 - v01) * ty) * sx;
+        const dy = ((v01 - v00) * (1 - tx) + (v11 - v10) * tx) * sy;
 
-        // Dye layer (primary)
-        const dr = dye.r[idx];
-        const dg = dye.g[idx];
-        const db = dye.b[idx];
+        // Distance to the nearest still line, in pixels, to first order.
+        const dist = Math.abs(v) / (Math.hypot(dx, dy) + flat);
+        const line = Math.max(0, Math.min(1, LINE_WIDTH - dist)) * presence;
 
-        // Additive blend: dye on top of vorticity underlay
-        data[pixIdx]     = Math.min(255, Math.floor(vr + dr * 255));
-        data[pixIdx + 1] = Math.min(255, Math.floor(vg + dg * 255));
-        data[pixIdx + 2] = Math.min(255, Math.floor(vb + db * 255));
-        data[pixIdx + 3] = 255;
+        // Which way each cell turns: warm one way, cool the other.
+        const tint = Math.min(1, Math.abs(v) / reference) * TINT;
+        let r: number, g: number, b: number;
+        if (v > 0) { r = 255 * tint; g = 130 * tint; b = 50 * tint; }
+        else { r = 50 * tint; g = 130 * tint; b = 255 * tint; }
+
+        const idx = Math.min(Math.round(fy), yRes - 1) * xRes + Math.min(Math.round(fx), xRes - 1);
+        const pix = (cy * cw + cx) * 4;
+        data[pix]     = Math.min(255, r + line * 255 + dye.r[idx] * 255);
+        data[pix + 1] = Math.min(255, g + line * 240 + dye.g[idx] * 255);
+        data[pix + 2] = Math.min(255, b + line * 210 + dye.b[idx] * 255);
+        data[pix + 3] = 255;
       }
     }
 

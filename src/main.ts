@@ -222,7 +222,7 @@ function frame(): void {
   sonifier.update(sim.w);
 
   sim.computeVorticity(vorticity);
-  renderer.render(sim, dye, vorticity);
+  renderer.render(sim, dye, vorticity, config.press);
   renderer.renderParticles(particles, config.grid, config.grid);
   drawLattice();
 

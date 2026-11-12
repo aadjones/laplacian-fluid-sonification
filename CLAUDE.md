@@ -32,7 +32,7 @@ node tools/compare.mjs <a> <b>     # print two renders side by side
 - `src/sim/basis.ts` — eigenfunction basis, ij pair ordering, analytic structure tensor
 - `src/sim/fluid.ts` — `FluidSim`: step loop, velocity and vorticity reconstruction, `injectImpulse`
 - `src/sim/dye.ts`, `src/sim/particles.ts` — passive dye and particles carried by the flow
-- `src/viz/renderer.ts` — Canvas 2D: dye, vorticity underlay, particles
+- `src/viz/renderer.ts` — Canvas 2D: the figure (bright lines where rotation is zero, warm/cool tint for turning direction, fading with the fluid), then dye and particles
 - `src/audio/sonifier.ts` — one sine per mode at `f = base·√(λ/λmin)`, loudness from `w`
 - `src/audio/amplitude.ts` — L1 shape and peak-referenced loudness (the dissertation's eq. 2)
 - `src/main.ts` — the page: the plate (fluid canvas; tap to poke, drag to stir) and the lattice (one cell per mode; press to excite it, glows with |w|)
