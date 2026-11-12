@@ -69,6 +69,44 @@ describe('FluidSim', () => {
     expect(e1).toBeLessThan(e0);
   });
 
+  it('drag fades a single mode at exactly the drag rate, whatever its eigenvalue', () => {
+    // A lone mode is a steady state, so with no viscosity drag is all that acts.
+    const dt = 0.001;
+    const drag = 3;
+    const steps = 200;
+    const expected = Math.exp(-drag * dt * steps);
+    for (const mode of [0, 5, 8]) {
+      const sim = new FluidSim({ rank: 9, xRes: 16, yRes: 16, viscosity: 0, drag, dt });
+      sim.w[mode] = 10;
+      for (let t = 0; t < steps; t++) sim.step();
+      expect(sim.w[mode] / 10).toBeCloseTo(expected, 9);
+    }
+  });
+
+  it('drag, unlike viscosity, fades low and high modes equally', () => {
+    const low = 0;  // (1,1), eigenvalue 2
+    const high = 8; // (3,3), eigenvalue 18
+    const remaining = (config: { viscosity: number; drag: number }, mode: number) => {
+      const sim = new FluidSim({ rank: 9, xRes: 16, yRes: 16, dt: 0.001, ...config });
+      sim.w[mode] = 1;
+      for (let t = 0; t < 100; t++) sim.step();
+      return sim.w[mode];
+    };
+    expect(remaining({ viscosity: 0, drag: 2 }, low)).toBeCloseTo(remaining({ viscosity: 0, drag: 2 }, high), 12);
+    expect(remaining({ viscosity: 1, drag: 0 }, high)).toBeLessThan(0.5 * remaining({ viscosity: 1, drag: 0 }, low));
+  });
+
+  it('drag brings a stirred fluid to rest', () => {
+    const sim = new FluidSim({ rank: 9, xRes: 16, yRes: 16, viscosity: 0, drag: 5, dt: 0.001 });
+    sim.injectImpulse(5, 9, 300, 700);
+    let before = 0;
+    for (let i = 0; i < sim.w.length; i++) before += Math.abs(sim.w[i]);
+    for (let t = 0; t < 2000; t++) sim.step();
+    let after = 0;
+    for (let i = 0; i < sim.w.length; i++) after += Math.abs(sim.w[i]);
+    expect(after).toBeLessThan(before * 1e-3);
+  });
+
   it('setCoefficients sets w and reconstructs velocity', () => {
     const sim = new FluidSim({ rank: 4, xRes: 16, yRes: 16 });
     sim.setCoefficients([1, 0, 0, 0]);

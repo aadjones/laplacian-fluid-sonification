@@ -35,6 +35,16 @@ export interface FluidConfig {
   conserveEnstrophy: boolean;
   /** Viscosity coefficient (0 = inviscid, default 0) */
   viscosity: number;
+  /**
+   * Drag: a decay rate applied equally to every mode (0 = none, default 0).
+   *
+   * Viscosity damps mode k at ν·λ_k, so it is lopsided by construction: at
+   * rank 64 the highest mode fades 64 times faster than the lowest, and no
+   * single value lets both ring for a sensible time. Drag is the even
+   * counterpart, the friction of a thin fluid layer against the surface under
+   * it (Ekman or Rayleigh drag). It is what brings the whole fluid to rest.
+   */
+  drag: number;
 }
 
 export const DEFAULT_CONFIG: FluidConfig = {
@@ -43,6 +53,7 @@ export const DEFAULT_CONFIG: FluidConfig = {
   yRes: 64,
   dt: 0.0001,
   viscosity: 0.0,
+  drag: 0.0,
   conserveEnstrophy: false,
 };
 
@@ -135,7 +146,7 @@ export class FluidSim {
    * Implements: advect (structure tensor) → integrate → energy correct → viscous diffuse → reconstruct.
    */
   step(): void {
-    const { rank, dt, viscosity } = this.config;
+    const { rank, dt, viscosity, drag } = this.config;
     const w = this.w;
     const wDot = this.wDot;
 
@@ -220,6 +231,12 @@ export class FluidSim {
         const lambda = -(k1 * k1 + k2 * k2);
         w[k] *= Math.exp(lambda * dt * viscosity);
       }
+    }
+
+    // Drag: the same decay for every mode.
+    if (drag > 0) {
+      const keep = Math.exp(-drag * dt);
+      for (let k = 0; k < rank; k++) w[k] *= keep;
     }
 
     // Reconstruct velocity field: v = U * w

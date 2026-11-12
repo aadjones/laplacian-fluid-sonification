@@ -19,9 +19,22 @@ const config = {
   stepsPerFrame: 2,
   dt: 0.0001,
   viscosity: 0.5,
+  /**
+   * Even damping on every mode; this is what lets a note end. At 40 a low note
+   * falls 20 dB in about 4.7 s and the highest in about 1.9 s. Viscosity alone
+   * left the lowest mode ringing for over a minute.
+   */
+  drag: 40,
   particleCount: 8000,
   /** Force of a tap, and of a stir at full speed. */
   force: 300,
+  /**
+   * How much one press of a lattice cell adds to its mode. Soft on purpose:
+   * at 100 a two-note chord keeps about 90% of its motion in the two notes and
+   * wakes a few neighbours. Pressing again adds more, and at three presses'
+   * worth the same chord spreads across 14 modes.
+   */
+  press: 100,
 };
 
 /** Drag speed, in grid cells per second, that reaches full force. */
@@ -29,6 +42,7 @@ const FULL_SPEED = 300;
 
 const sim = new FluidSim({
   rank: config.rank, xRes: config.grid, yRes: config.grid, dt: config.dt, viscosity: config.viscosity,
+  drag: config.drag,
 });
 const dye = new DyeField(config.grid, config.grid);
 const particles = new ParticleSystem(config.particleCount, config.grid, config.grid);
@@ -95,7 +109,7 @@ lattice.addEventListener('pointerdown', (e) => {
   const index = (e.target as HTMLElement).dataset?.index;
   if (index === undefined) return;
   startAudio();
-  sim.w[Number(index)] += config.force;
+  sim.w[Number(index)] += config.press;
 });
 
 /** Slowly-falling reference for the glow, so cells dim as the fluid settles. */

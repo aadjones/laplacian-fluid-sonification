@@ -22,7 +22,7 @@ it. That version is preserved on `fluid/physics-audio-overhaul`.
 npm install
 npm run dev           # Vite dev server
 npm run build         # Type check + production build
-npm test              # 29 tests (vitest)
+npm test              # 32 tests (vitest)
 node tools/measure.mjs <label>     # record a fixed 110 s pointer phrase (dev server running)
 node tools/compare.mjs <a> <b>     # print two renders side by side
 ```
@@ -45,8 +45,13 @@ node tools/compare.mjs <a> <b>     # print two renders side by side
 - **`w` has no audio-rate motion.** The reduced equation is first order, so λ is a decay
   rate, not a frequency. Measured oscillation in `w` is 0.02–0.2 Hz. The fluid gives
   envelopes and spectra; pitch is assigned by the mapping.
-- **Low modes linger, high modes die.** Viscous decay is `ν·λ`: at default damping the
-  lowest mode lasts about 80 wall seconds and the highest under a second.
+- **Viscosity is lopsided; drag is even.** Viscous decay is `ν·λ`, so with viscosity alone
+  the lowest mode lasted about 80 wall seconds and the highest about one. `drag` damps
+  every mode at the same rate and is what lets a note end: at 40, a low note falls 20 dB
+  in about 5 s and the highest in about 2 s.
+- **One mode is a steady note; two or more flow.** A lone eigenmode (or a mirror pair)
+  never spreads. Different modes exchange energy at a rate set by how hard they were
+  played: at a press of 100 a two-note chord wakes about 5 modes, at 300 about 14.
 - **The basis is orthogonal, not orthonormal.** Energy is `Σ w²/λ`; `Σ w²` is enstrophy.
 - **Eigenvalues are not sorted.** `buildIjPairs` orders by `max(k1,k2)`; never take
   `eigenvalues[0]` as the minimum.
