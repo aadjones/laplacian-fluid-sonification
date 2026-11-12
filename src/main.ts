@@ -168,6 +168,12 @@ function releaseDye(k: number): void {
   }
 }
 
+// Escape mutes everything: a damper on every mode. No on-screen control.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  for (let k = 0; k < config.rank; k++) dampers.set(k, MUTE_HOLD);
+});
+
 function applyDampers(seconds: number): void {
   const keep = Math.exp(-seconds / MUTE_TC);
   for (const [k, left] of dampers) {
