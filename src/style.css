@@ -1,7 +1,8 @@
 /*
   [page]
-    [stage]      <- fills the viewport, centres its child
-      canvas     <- square, as large as the shorter side allows
+    [stage]        <- stacked on mobile / side by side from 768px
+      [plate]      <- the fluid canvas, square
+      [lattice]    <- one cell per mode, square
 */
 
 * {
@@ -15,17 +16,58 @@ body {
 }
 
 #stage {
+  --gap: 12px;
+  /* Two squares stacked: each as wide as the screen or half its height. */
+  --square: min(100vw - 2 * var(--gap), (100dvh - 3 * var(--gap)) / 2);
   width: 100vw;
   height: 100dvh;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: var(--gap);
+}
+
+#plate,
+#lattice {
+  width: var(--square);
+  height: var(--square);
+  flex: none;
 }
 
 #fluid {
-  width: min(100vw, 100dvh);
-  height: min(100vw, 100dvh);
+  width: 100%;
+  height: 100%;
   display: block;
   touch-action: none;
   cursor: crosshair;
+}
+
+#lattice {
+  display: grid;
+  grid-template-columns: repeat(var(--side), 1fr);
+  grid-template-rows: repeat(var(--side), 1fr);
+  gap: 3px;
+  touch-action: none;
+  user-select: none;
+}
+
+.lattice-cell {
+  --glow: 0;
+  border-radius: 3px;
+  border: 1px solid #1b2333;
+  background: rgb(60 170 255 / calc(0.04 + 0.96 * var(--glow)));
+  cursor: pointer;
+}
+
+.lattice-cell.is-empty {
+  visibility: hidden;
+}
+
+@media (min-width: 768px) {
+  #stage {
+    /* Two squares side by side: each half the width or the full height. */
+    --square: min((100vw - 3 * var(--gap)) / 2, 100dvh - 2 * var(--gap));
+    flex-direction: row;
+  }
 }

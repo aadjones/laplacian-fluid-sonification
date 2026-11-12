@@ -35,7 +35,7 @@ node tools/compare.mjs <a> <b>     # print two renders side by side
 - `src/viz/renderer.ts` — Canvas 2D: dye, vorticity underlay, particles
 - `src/audio/sonifier.ts` — one sine per mode at `f = base·√(λ/λmin)`, loudness from `w`
 - `src/audio/amplitude.ts` — L1 shape and peak-referenced loudness (the dissertation's eq. 2)
-- `src/main.ts` — the page: one canvas, tap to poke, drag to stir
+- `src/main.ts` — the page: the plate (fluid canvas; tap to poke, drag to stir) and the lattice (one cell per mode; press to excite it, glows with |w|)
 - `tools/` — signal measurement harness; renders go to `tools/renders/` (git-ignored)
 
 ## Things that are true and were expensive to learn

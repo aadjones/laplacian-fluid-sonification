@@ -35,16 +35,81 @@ const particles = new ParticleSystem(config.particleCount, config.grid, config.g
 const sonifier = new Sonifier();
 const vorticity = new Float64Array(config.grid * config.grid);
 
-// [page] > [stage] > canvas
+// [page] > [stage] > [plate] (the fluid) + [lattice] (the modes)
 const stage = document.createElement('div');
 stage.id = 'stage';
+
+const plate = document.createElement('div');
+plate.id = 'plate';
 const canvas = document.createElement('canvas');
 canvas.id = 'fluid';
 canvas.width = config.canvasSize;
 canvas.height = config.canvasSize;
-stage.appendChild(canvas);
+plate.appendChild(canvas);
+stage.appendChild(plate);
+
+/**
+ * The lattice: one cell per eigenmode, laid out by (k1, k2) with (1,1) at the
+ * bottom left. It is a keyboard and a spectrum display at once. Pressing a cell
+ * puts that mode into the fluid; every cell glows with how much of its mode the
+ * fluid holds, whoever put it there.
+ *
+ * A single mode is a steady solution of the fluid equations, so one cell alone
+ * is a pure note with a fixed shape. Two or more different modes exchange
+ * energy, and the pattern starts to flow.
+ */
+const lattice = document.createElement('div');
+lattice.id = 'lattice';
+const side = Math.max(...sim.pairs.map((p) => Math.max(p.k1, p.k2)));
+lattice.style.setProperty('--side', String(side));
+/** Cell element for each mode index, or undefined where the rank has no mode. */
+const cells: (HTMLElement | undefined)[] = [];
+for (let k2 = side; k2 >= 1; k2--) {
+  for (let k1 = 1; k1 <= side; k1++) {
+    const cell = document.createElement('div');
+    cell.className = 'lattice-cell';
+    const k = sim.pairs.findIndex((p) => p.k1 === k1 && p.k2 === k2);
+    if (k >= 0) {
+      cell.dataset.mode = `${k1},${k2}`;
+      cell.dataset.index = String(k);
+      cells[k] = cell;
+    } else {
+      cell.classList.add('is-empty');
+    }
+    lattice.appendChild(cell);
+  }
+}
+stage.appendChild(lattice);
+
 document.querySelector<HTMLDivElement>('#app')!.appendChild(stage);
 const renderer = new FluidRenderer(canvas);
+
+function startAudio(): void {
+  if (sonifier.started) return;
+  const eigenvalues: number[] = [];
+  for (let k = 0; k < config.rank; k++) eigenvalues.push(sim.eigenvalue(k));
+  sonifier.init(eigenvalues);
+}
+
+lattice.addEventListener('pointerdown', (e) => {
+  const index = (e.target as HTMLElement).dataset?.index;
+  if (index === undefined) return;
+  startAudio();
+  sim.w[Number(index)] += config.force;
+});
+
+/** Slowly-falling reference for the glow, so cells dim as the fluid settles. */
+let glowPeak = 1;
+
+function drawLattice(): void {
+  let top = 0;
+  for (let k = 0; k < config.rank; k++) top = Math.max(top, Math.abs(sim.w[k]));
+  glowPeak = Math.max(top, glowPeak * 0.999, 1);
+  for (let k = 0; k < config.rank; k++) {
+    // Square root, so a mode at a tenth of the loudest is still visible.
+    cells[k]?.style.setProperty('--glow', Math.sqrt(Math.abs(sim.w[k]) / glowPeak).toFixed(3));
+  }
+}
 
 // --- Touch ---
 
@@ -62,11 +127,7 @@ function gridPos(e: PointerEvent): { gx: number; gy: number } {
 let last: { gx: number; gy: number; t: number } | null = null;
 
 canvas.addEventListener('pointerdown', (e) => {
-  if (!sonifier.started) {
-    const eigenvalues: number[] = [];
-    for (let k = 0; k < config.rank; k++) eigenvalues.push(sim.eigenvalue(k));
-    sonifier.init(eigenvalues);
-  }
+  startAudio();
 
   // A tap is a poke. A finger landing has no direction the player chose, so it
   // gets a random one.
@@ -117,6 +178,7 @@ function frame(): void {
   sim.computeVorticity(vorticity);
   renderer.render(sim, dye, vorticity);
   renderer.renderParticles(particles, config.grid, config.grid);
+  drawLattice();
 
   requestAnimationFrame(frame);
 }
