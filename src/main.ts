@@ -31,11 +31,16 @@ const config = {
   /**
    * How much one press of a lattice cell adds to its mode. Soft on purpose:
    * at 100 a two-note chord keeps about 90% of its motion in the two notes and
-   * wakes a few neighbours. Pressing again adds more, and at three presses'
-   * worth the same chord spreads across 14 modes.
+   * wakes a few neighbours.
    */
   press: 100,
 };
+
+/** A mode holding more than this share of a press counts as sounding. */
+const SOUNDING = 0.3;
+/** Seconds for a muted mode to fall to 1/e, and how long the damper stays on it. */
+const MUTE_TC = 0.08;
+const MUTE_HOLD = 0.5;
 
 /** Drag speed, in grid cells per second, that reaches full force. */
 const FULL_SPEED = 300;
@@ -105,23 +110,43 @@ function startAudio(): void {
   sonifier.init(eigenvalues);
 }
 
+/**
+ * Modes with a damper on them, and the seconds each has left. A damper is a
+ * finger on the plate: it takes that one mode out of the fluid and holds it
+ * out briefly, so its neighbours cannot refill it the instant it is released.
+ */
+const dampers = new Map<number, number>();
+
+// One press, one mode: a dark cell sounds, a bright cell is muted. Each finger
+// is its own pointer, so several cells can be pressed at once.
 lattice.addEventListener('pointerdown', (e) => {
   const index = (e.target as HTMLElement).dataset?.index;
   if (index === undefined) return;
   startAudio();
-  sim.w[Number(index)] += config.press;
+  const k = Number(index);
+  if (Math.abs(sim.w[k]) > SOUNDING * config.press) {
+    dampers.set(k, MUTE_HOLD);
+  } else {
+    dampers.delete(k);
+    sim.w[k] += config.press;
+  }
 });
 
-/** Slowly-falling reference for the glow, so cells dim as the fluid settles. */
-let glowPeak = 1;
+function applyDampers(seconds: number): void {
+  const keep = Math.exp(-seconds / MUTE_TC);
+  for (const [k, left] of dampers) {
+    sim.w[k] *= keep;
+    if (left <= seconds) dampers.delete(k);
+    else dampers.set(k, left - seconds);
+  }
+}
 
 function drawLattice(): void {
-  let top = 0;
-  for (let k = 0; k < config.rank; k++) top = Math.max(top, Math.abs(sim.w[k]));
-  glowPeak = Math.max(top, glowPeak * 0.999, 1);
   for (let k = 0; k < config.rank; k++) {
-    // Square root, so a mode at a tenth of the loudest is still visible.
-    cells[k]?.style.setProperty('--glow', Math.sqrt(Math.abs(sim.w[k]) / glowPeak).toFixed(3));
+    // Against one press, not against the loudest mode, so a bright cell always
+    // means the same thing. Square root keeps a quiet mode visible.
+    const level = Math.min(1, Math.abs(sim.w[k]) / config.press);
+    cells[k]?.style.setProperty('--glow', Math.sqrt(level).toFixed(3));
   }
 }
 
@@ -178,7 +203,14 @@ canvas.addEventListener('pointercancel', release);
 
 // --- Loop ---
 
+let lastFrame = performance.now();
+
 function frame(): void {
+  const now = performance.now();
+  const seconds = Math.min(0.1, (now - lastFrame) / 1000);
+  lastFrame = now;
+
+  applyDampers(seconds);
   for (let i = 0; i < config.stepsPerFrame; i++) sim.step();
 
   const frameDt = config.dt * config.stepsPerFrame;
