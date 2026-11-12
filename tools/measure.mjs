@@ -7,12 +7,12 @@
  * records the real post-limiter output, and writes <label>.wav and
  * <label>.json into tools/renders/. Compare two labels with tools/compare.mjs.
  *
- * The phrase, in seconds:
- *     2  tap A            (the probe: same point, same seeded direction)
- *    16  stir, 4 s
- *    32  busy playing, 40 s of taps and stirs
- *    76  tap A again      (the probe, after the instrument has been played)
- *    90  idle to 110
+ * The phrase, in seconds, played on the lattice pads only:
+ *     2  one note, pad (2,1)       (the probe)
+ *    16  a chord, (2,1) + (3,2)
+ *    32  busy playing, 40 s
+ *    84  the probe note again, once the fluid has settled
+ *    98  idle to 110
  *
  * Playwright comes from the npx cache, because it is not a project dependency.
  */
@@ -136,61 +136,29 @@ async function poll() {
 let polling = true;
 const poller = (async () => { while (polling) { await poll(); await sleep(500); } })();
 
-async function tap(fx, fy) {
-  const [x, y] = at(fx, fy);
-  await page.mouse.move(x, y);
-  await page.mouse.down();
-  await page.mouse.up();
-}
-/** Stir in a circle about (cx,cy) for `sec` seconds. */
-async function stir(cx, cy, radius, sec, turns) {
-  const steps = Math.round(sec * 60);
-  const [x0, y0] = at(cx + radius, cy);
-  await page.mouse.move(x0, y0);
-  await page.mouse.down();
-  const start = Date.now();
-  for (let i = 1; i <= steps; i++) {
-    const a = (i / steps) * turns * 2 * Math.PI;
-    const [x, y] = at(cx + radius * Math.cos(a), cy + radius * Math.sin(a));
-    await page.mouse.move(x, y);
-    const d = start + (i / steps) * sec * 1000 - Date.now();
-    if (d > 0) await sleep(d);
-  }
-  await page.mouse.up();
-}
+/** Press one lattice pad, by mode, e.g. '3,2'. */
+const press = (mode) => page.locator(`[data-mode="${mode}"]`).click();
 
-const PROBE = [0.31, 0.37];
 const marks = {};
 const mark = (name) => { marks[name] = (Date.now() - t0) / 1000; };
 
-// Reseed before each probe so both are the same strike: same direction, same jitter.
-// Reseed and press inside one task: the frame loop also draws random numbers,
-// so any frame between the reseed and the press would change the strike.
-const probe = async () => {
-  const [x, y] = at(...PROBE);
-  await page.evaluate(([cx, cy]) => {
-    window.__reseed();
-    const c = document.querySelector('canvas#fluid');
-    c.dispatchEvent(new PointerEvent('pointerdown', { clientX: cx, clientY: cy, bubbles: true, pointerId: 1 }));
-    c.dispatchEvent(new PointerEvent('pointerup', { clientX: cx, clientY: cy, bubbles: true, pointerId: 1 }));
-  }, [x, y]);
-};
-await until(2); mark('probe1'); await probe();
-await until(16); mark('stir'); await stir(0.55, 0.5, 0.2, 4, 3);
-await page.screenshot({ path: join(outDir, `${label}-after-stir.png`) });
+await until(2); mark('probe1'); await press('2,1');
+await until(16); mark('chord'); await press('2,1'); await press('3,2');
+await page.screenshot({ path: join(outDir, `${label}-chord.png`) });
 await until(32); mark('busy');
 {
-  // 40 s of playing: a tap every 2 s walking a fixed lattice, a stir every 8 s.
-  const pts = [[0.2, 0.25], [0.7, 0.3], [0.45, 0.7], [0.8, 0.75], [0.3, 0.55], [0.6, 0.45]];
+  // 40 s of playing: a pad every 2 s, walking a fixed sequence. A pad that is
+  // still lit when its turn comes round is muted by the press, as designed.
+  const seq = ['1,1', '3,2', '2,3', '5,1', '1,2', '4,4', '2,1', '6,3', '3,5', '1,3'];
   for (let i = 0; i < 20; i++) {
     await until(32 + i * 2);
-    if (i % 4 === 3) await stir(pts[i % 6][0], pts[i % 6][1], 0.12, 1.5, 1.5);
-    else await tap(...pts[i % 6]);
+    await press(seq[i % seq.length]);
+    if (i % 4 === 3) await press(seq[(i + 3) % seq.length]);
   }
 }
 await page.screenshot({ path: join(outDir, `${label}-busy.png`) });
-await until(76); mark('probe2'); await probe();
-await until(90); mark('idle');
+await until(84); mark('probe2'); await press('2,1');
+await until(98); mark('idle');
 await until(110); mark('end');
 
 polling = false;

@@ -14,6 +14,8 @@ import type { ParticleSystem } from '../sim/particles';
 
 /** Width of a still line, in canvas pixels. */
 const LINE_WIDTH = 1.8;
+/** Length of a particle's streak, in frames of travel. */
+const TRAIL = 3;
 /** Brightness of the turning-direction tint at one note's strength. */
 const TINT = 0.45;
 
@@ -98,29 +100,35 @@ export class FluidRenderer {
   }
 
   /**
-   * Render particles as small dots over the existing canvas content.
+   * Draw each particle as the stroke it travelled this frame.
+   *
+   * Still fluid shows as dots; moving fluid shows as streaks whose length is
+   * its speed and whose direction is its direction. `previous` holds the
+   * positions before this frame's advection, in the same layout.
    */
-  renderParticles(particles: ParticleSystem, xRes: number, yRes: number): void {
+  renderParticles(particles: ParticleSystem, previous: Float32Array | Float64Array, xRes: number, yRes: number): void {
     const cw = this.canvas.width;
     const ch = this.canvas.height;
     const scaleX = cw / (xRes - 1);
     const scaleY = ch / (yRes - 1);
     const ctx = this.ctx;
+    // A particle that respawned this frame jumped; do not draw the jump.
+    const jump = (xRes / 8) ** 2;
 
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
-
+    ctx.strokeStyle = 'rgba(255, 244, 225, 0.6)';
+    ctx.lineWidth = 1.2;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
     for (let i = 0; i < particles.count; i++) {
-      const px = particles.positions[i * 2] * scaleX;
-      const py = particles.positions[i * 2 + 1] * scaleY;
-
-      const age = particles.ages[i];
-      if (age < 10) {
-        ctx.globalAlpha = age / 10 * 0.5;
-        ctx.fillRect(px - 0.5, py - 0.5, 1, 1);
-        ctx.globalAlpha = 1;
-      } else {
-        ctx.fillRect(px - 0.5, py - 0.5, 1, 1);
-      }
+      const x1 = particles.positions[i * 2];
+      const y1 = particles.positions[i * 2 + 1];
+      let x0 = previous[i * 2];
+      let y0 = previous[i * 2 + 1];
+      if ((x1 - x0) ** 2 + (y1 - y0) ** 2 > jump) { x0 = x1; y0 = y1; }
+      // Trail three frames long, so slow motion still reads as motion.
+      ctx.moveTo((x1 - (x1 - x0) * TRAIL) * scaleX, (y1 - (y1 - y0) * TRAIL) * scaleY);
+      ctx.lineTo(x1 * scaleX, y1 * scaleY);
     }
+    ctx.stroke();
   }
 }

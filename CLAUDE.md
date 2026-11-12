@@ -23,7 +23,7 @@ npm install
 npm run dev           # Vite dev server
 npm run build         # Type check + production build
 npm test              # 32 tests (vitest)
-node tools/measure.mjs <label>     # record a fixed 110 s pointer phrase (dev server running)
+node tools/measure.mjs <label>     # record a fixed 110 s phrase played on the pads (dev server running)
 node tools/compare.mjs <a> <b>     # print two renders side by side
 ```
 
@@ -32,10 +32,10 @@ node tools/compare.mjs <a> <b>     # print two renders side by side
 - `src/sim/basis.ts` — eigenfunction basis, ij pair ordering, analytic structure tensor
 - `src/sim/fluid.ts` — `FluidSim`: step loop, velocity and vorticity reconstruction, `injectImpulse`
 - `src/sim/dye.ts`, `src/sim/particles.ts` — passive dye and particles carried by the flow
-- `src/viz/renderer.ts` — Canvas 2D: the figure (bright lines where rotation is zero, warm/cool tint for turning direction, fading with the fluid), then dye and particles
+- `src/viz/renderer.ts` — Canvas 2D: the figure (bright lines where rotation is zero, warm/cool tint for turning direction, fading with the fluid), dye, and particles drawn as streaks along their motion
 - `src/audio/sonifier.ts` — one sine per mode at `f = base·√(λ/λmin)`, loudness from `w`
 - `src/audio/amplitude.ts` — L1 shape and peak-referenced loudness (the dissertation's eq. 2)
-- `src/main.ts` — the page: the plate (fluid canvas; tap to poke, drag to stir) and the lattice (one cell per mode; press to excite it, glows with |w|)
+- `src/main.ts` — the page: the plate (display only) and the lattice (one pad per mode; a dark pad sounds its mode, a lit pad mutes it; glow follows |w|)
 - `tools/` — signal measurement harness; renders go to `tools/renders/` (git-ignored)
 
 ## Things that are true and were expensive to learn
@@ -57,6 +57,17 @@ node tools/compare.mjs <a> <b>     # print two renders side by side
   `eigenvalues[0]` as the minimum.
 - **A suspended AudioContext is silent with no other symptom.** Always report its state
   and `currentTime` with any measurement.
+
+## Decisions already made
+
+- **The lattice is the only input.** Poking and dragging on the plate was removed: each
+  pointer move fired a full-strength point kick, which excites every mode at once. A real
+  stir (a broad, gentle push) is a candidate, not yet built.
+- **No figures inside the pads.** Tried; 64 small grids inside a grid was confusing.
+- **Tracers run 6x faster than the fluid** (`tracerSpeed`). Dye and particles are passive and
+  do not affect `w` or the sound; at true speed a note barely turns before it fades.
+- **Dye alone cannot show the flow on this grid.** At 128 cells it smears within a second.
+  Particle streaks carry the motion.
 
 ## Data layout
 

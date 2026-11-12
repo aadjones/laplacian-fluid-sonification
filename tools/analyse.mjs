@@ -149,9 +149,9 @@ export function analyse(pcm, sr, marks, state) {
   const segments = [
     seg('probe1 attack', marks.probe1, marks.probe1 + 1),
     seg('probe1 ring', marks.probe1 + 1, marks.probe1 + 6),
-    seg('probe1 tail', marks.probe1 + 6, marks.stir),
-    seg('stir', marks.stir, marks.stir + 4),
-    seg('after stir', marks.stir + 4, marks.busy),
+    seg('probe1 tail', marks.probe1 + 6, marks.chord),
+    seg('chord', marks.chord, marks.chord + 4),
+    seg('after chord', marks.chord + 4, marks.busy),
     seg('busy first half', marks.busy, marks.busy + 20),
     seg('busy second half', marks.busy + 20, marks.busy + 40),
     seg('probe2 attack', marks.probe2, marks.probe2 + 1),
@@ -185,7 +185,7 @@ export function analyse(pcm, sr, marks, state) {
     overall: windowStats(pcm, sr, 0, pcm.length / sr),
     probe1: {
       ...windowStats(pcm, sr, A(marks.probe1), A(marks.probe1 + 6)),
-      ringTo20dB: ringTime(pcm, sr, A(marks.probe1), A(marks.stir) - 0.5),
+      ringTo20dB: ringTime(pcm, sr, A(marks.probe1), A(marks.chord) - 0.5),
       beatDepth: beatDepth(pcm, sr, A(marks.probe1), A(marks.probe1 + 8)),
     },
     probe2: {
@@ -197,7 +197,7 @@ export function analyse(pcm, sr, marks, state) {
     activeModes: {
       note: 'participation ratio of w, (sum|w|)^2 / sum(w^2), out of `rank`',
       afterProbe1: part(marks.probe1 + 0.5, marks.probe1 + 6),
-      duringStir: part(marks.stir, marks.stir + 4),
+      duringChord: part(marks.chord, marks.chord + 4),
       duringBusy: part(marks.busy, marks.busy + 40),
       afterProbe2: part(marks.probe2 + 0.5, marks.probe2 + 6),
       idle: part(marks.idle + 5, marks.end),

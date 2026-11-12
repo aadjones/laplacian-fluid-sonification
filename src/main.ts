@@ -9,8 +9,8 @@ import { Sonifier } from './audio/sonifier';
  * A Chladni plate made of fluid.
  *
  * The fluid's state `w` (one coefficient per eigenmode) is the only state.
- * The picture is drawn from it and the sound is read from it. Touching the
- * canvas pushes the fluid; nothing else is an input.
+ * The picture is drawn from it and the sound is read from it. The lattice of
+ * pads is the only input: each pad puts one mode into the fluid or takes it out.
  */
 const config = {
   rank: 64,
@@ -26,8 +26,13 @@ const config = {
    */
   drag: 40,
   particleCount: 8000,
-  /** Force of a tap, and of a stir at full speed. */
-  force: 300,
+  /**
+   * How much faster the dye and particles travel than the fluid itself. They
+   * are passive tracers and change nothing in `w` or the sound. At true speed
+   * one note turns its cells by about an eighth of a turn before it fades,
+   * which reads as a diagram, not a liquid.
+   */
+  tracerSpeed: 6,
   /**
    * How much one press of a lattice cell adds to its mode. Soft on purpose:
    * at 100 a two-note chord keeps about 90% of its motion in the two notes and
@@ -42,9 +47,6 @@ const SOUNDING = 0.3;
 const MUTE_TC = 0.08;
 const MUTE_HOLD = 0.5;
 
-/** Drag speed, in grid cells per second, that reaches full force. */
-const FULL_SPEED = 300;
-
 const sim = new FluidSim({
   rank: config.rank, xRes: config.grid, yRes: config.grid, dt: config.dt, viscosity: config.viscosity,
   drag: config.drag,
@@ -53,6 +55,8 @@ const dye = new DyeField(config.grid, config.grid);
 const particles = new ParticleSystem(config.particleCount, config.grid, config.grid);
 const sonifier = new Sonifier();
 const vorticity = new Float64Array(config.grid * config.grid);
+/** Where each particle was before this frame, for drawing its streak. */
+const previousPositions = particles.positions.slice();
 
 // [page] > [stage] > [plate] (the fluid) + [lattice] (the modes)
 const stage = document.createElement('div');
@@ -129,8 +133,40 @@ lattice.addEventListener('pointerdown', (e) => {
   } else {
     dampers.delete(k);
     sim.w[k] += config.press;
+    releaseDye(k);
   }
 });
+
+/**
+ * A note releases dye into its own figure: one thin streak per cell, from near
+ * the cell's centre out toward its edge, coloured by the way that cell turns.
+ * The fluid turns faster near the middle of a cell than at its rim, so the
+ * streak is wound into a spiral. A round drop would only drift.
+ */
+function releaseDye(k: number): void {
+  const { k1, k2 } = sim.pairs[k];
+  const span = config.grid - 1;
+  const cellW = span / k1;
+  const cellH = span / k2;
+  const radius = Math.max(1.1, 0.035 * Math.min(cellW, cellH));
+  const spin = Math.sign(sim.w[k]) || 1;
+  const DROPS = 7;
+  for (let j = 0; j < k2; j++) {
+    for (let i = 0; i < k1; i++) {
+      const warm = ((i + j) % 2 === 0 ? 1 : -1) * spin > 0;
+      for (let d = 0; d < DROPS; d++) {
+        // From 8% to 44% of the way across the cell, along its long axis.
+        const t = 0.08 + (0.36 * d) / (DROPS - 1);
+        dye.inject(
+          (i + 0.5 + (cellW >= cellH ? t : 0)) * cellW,
+          (j + 0.5 + (cellW >= cellH ? 0 : t)) * cellH,
+          warm ? 1.0 : 0.25, 0.55, warm ? 0.25 : 1.0,
+          radius,
+        );
+      }
+    }
+  }
+}
 
 function applyDampers(seconds: number): void {
   const keep = Math.exp(-seconds / MUTE_TC);
@@ -150,57 +186,6 @@ function drawLattice(): void {
   }
 }
 
-// --- Touch ---
-
-function gridPos(e: PointerEvent): { gx: number; gy: number } {
-  const rect = canvas.getBoundingClientRect();
-  const cx = (e.clientX - rect.left) / rect.width;
-  const cy = (e.clientY - rect.top) / rect.height;
-  const max = config.grid - 2;
-  return {
-    gx: Math.min(Math.max(cx * (config.grid - 1), 0), max),
-    gy: Math.min(Math.max(cy * (config.grid - 1), 0), max),
-  };
-}
-
-let last: { gx: number; gy: number; t: number } | null = null;
-
-canvas.addEventListener('pointerdown', (e) => {
-  startAudio();
-
-  // A tap is a poke. A finger landing has no direction the player chose, so it
-  // gets a random one.
-  const { gx, gy } = gridPos(e);
-  const angle = Math.random() * Math.PI * 2;
-  sim.injectImpulse(gx, gy, Math.cos(angle) * config.force, Math.sin(angle) * config.force);
-  dye.inject(gx, gy, 0.1, 0.4, 0.9, 4);
-  last = { gx, gy, t: performance.now() };
-  // Keep receiving the drag if it leaves the canvas. Throws for a pointer the
-  // browser is not tracking, which only a synthetic event can be.
-  try { canvas.setPointerCapture(e.pointerId); } catch { /* not a live pointer */ }
-});
-
-canvas.addEventListener('pointermove', (e) => {
-  if (!last) return;
-  // A stir pushes the fluid the way the pointer moved, harder when it moves faster.
-  const { gx, gy } = gridPos(e);
-  const now = performance.now();
-  const seconds = Math.max(1e-3, (now - last.t) / 1000);
-  const dx = gx - last.gx;
-  const dy = gy - last.gy;
-  const dist = Math.hypot(dx, dy);
-  if (dist > 1e-6) {
-    const strength = Math.min(1, dist / seconds / FULL_SPEED) * config.force;
-    sim.injectImpulse(gx, gy, (dx / dist) * strength, (dy / dist) * strength);
-  }
-  dye.inject(gx, gy, 0.1, 0.4, 0.9, 4);
-  last = { gx, gy, t: now };
-});
-
-const release = (): void => { last = null; };
-canvas.addEventListener('pointerup', release);
-canvas.addEventListener('pointercancel', release);
-
 // --- Loop ---
 
 let lastFrame = performance.now();
@@ -213,17 +198,18 @@ function frame(): void {
   applyDampers(seconds);
   for (let i = 0; i < config.stepsPerFrame; i++) sim.step();
 
-  const frameDt = config.dt * config.stepsPerFrame;
-  dye.advect(sim.velocity, frameDt);
-  dye.dissipate(0.985);
-  particles.advect(sim.velocity, config.grid, config.grid, frameDt, 1);
+  const tracerDt = config.dt * config.stepsPerFrame * config.tracerSpeed;
+  dye.advect(sim.velocity, tracerDt);
+  dye.dissipate(0.995);
+  previousPositions.set(particles.positions);
+  particles.advect(sim.velocity, config.grid, config.grid, tracerDt, 1);
 
   // Sound before picture: the audio path should not wait on rendering.
   sonifier.update(sim.w);
 
   sim.computeVorticity(vorticity);
   renderer.render(sim, dye, vorticity, config.press);
-  renderer.renderParticles(particles, config.grid, config.grid);
+  renderer.renderParticles(particles, previousPositions, config.grid, config.grid);
   drawLattice();
 
   requestAnimationFrame(frame);
